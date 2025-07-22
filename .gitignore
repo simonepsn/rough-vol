@@ -1,2 +1,7 @@
-/figures
-/papers
+other/figures
+other/papers
+src/__pycache__
+notebooks
+backup
+metodologia-indice-interno
+roadmap-metodologia
