@@ -1,0 +1,82 @@
+1. Modeling Objective and Theoretical Anchoring
+x 1.1. Explain the rationale for modeling log-volatility under PP, not QQ. 
+x 1.2. Clarify the empirical goal: forecasting realized log-volatility pathwise, not pricing derivatives.
+1.3. Define explicitly what it means to “fit” volatility: via moment structures, temporal dependence, roughness.
+1.4. Anticipate that model performance will be judged on empirical match, not likelihood or pricing error.
+
+2. Formalization of Competing Models
+2.1. GARCH(1,1) specification:
+  2.1.1. Present the recurrence: σt2=ω+αrt−12+βσt−12σt2​=ω+αrt−12​+βσt−12​
+  2.1.2. Explain parameter constraints (positivity, stationarity).
+  2.1.3. Discuss what volatility clustering looks like under this form.
+  2.1.4. Mention its deterministic update structure once parameters are estimated.
+  2.1.5. Position it as a baseline, not a rival in terms of theory.
+
+2.2. HAR-RV specification:
+  2.2.1. Write the regression: log-RVt=β0+β1log-RVt−1+β2log-RV‾t−1(w)+β3log-RV‾t−1(m)+εtlog-RVt​=β0​+β1​log-RVt−1​+β2​log-RV​t−1(w)​+β3​log-RV​t−1(m)​+εt​
+  2.2.2. Define the weekly and monthly averages precisely.
+  2.2.3. Discuss economic interpretation of long-memory via lag aggregation.
+  2.2.4. Justify OLS estimation and its adequacy for linear memory models.
+
+2.3. Rough volatility model:
+  2.3.1. Define: log⁡σt=Xt=ν∫0t(t−s)H−12dWslogσt​=Xt​=ν∫0t​(t−s)H−21​dWs​
+  2.3.2. Clarify how this is a moving average of Brownian noise with singular kernel.
+  2.3.3. Interpret νν as volatility-of-volatility, and HH as a roughness parameter.
+  2.3.4. Emphasize lack of mean reversion, Markovianity, and tractable density.
+  2.3.5. Explain why the model fits the stylized facts (irregularity, long-range shape).
+
+3. Simulation of Rough Log-Volatility Paths
+3.1. Set simulation objective: generate realistic paths of log-volatility under rough kernel.
+3.2. Describe time grid: length TT, number of steps NN, delta ΔtΔt.
+3.3. Detail the discrete approximation:
+  3.3.1. Define kernel K(t−s)=(t−s)H−12K(t−s)=(t−s)H−21​, singular at 0.
+  3.3.2. Approximate integral as Riemann sum: Xt≈ν∑i=1t/ΔtK(t−si)ΔWiXt​≈ν∑i=1t/Δt​K(t−si​)ΔWi​.
+  3.3.3. Mention potential use of hybrid scheme for improved accuracy near 0.
+3.4. Justify truncation bounds (memory cutoff) and simulate Brownian increments.
+3.5. Reconstruct log⁡σtlogσt​ path from convolution and discuss exponentiation to get σtσt​.
+3.6. Plot example paths to inspect roughness and pathwise behavior.
+3.7. Discuss computational constraints: vectorization, numerical precision, reproducibility (seed).
+
+4. Parameter Calibration for Rough Model
+4.1. Fix HH or estimate it empirically?
+  4.1.1. If fixed: justify literature consensus (Gatheral: H≈0.1H≈0.1).
+  4.1.2. If estimated: explain empirical ACF/PACF fit or log-log variogram slope.
+4.2. Choose initial νν:
+  4.2.1. Link to observed volatility-of-volatility range.
+  4.2.2. Provide economic interpretation: higher νν means more erratic variance.
+4.3. Implement sensitivity checks on these parameters later (see Section 4 in thesis).
+
+5. Estimation Method: Method of Simulated Moments (MSM)
+5.1. Explain theoretical foundation: matching empirical and simulated moments.
+5.2. Select target moments:
+  5.2.1. Autocorrelations at lags 1 to 5.
+  5.2.2. Mean, variance, and optional kurtosis of log-RV.
+  5.2.3. Possibly scaling-law exponent from aggregation windows.
+5.3. Construct loss function:
+  5.3.1. L(θ)=∑jwj(mjemp−mjsim(θ))2L(θ)=∑j​wj​(mjemp​−mjsim​(θ))2
+  5.3.2. Define or justify weights wjwj​ (equal or inverse variance).
+5.4. Optimization routine:
+  5.4.1. Grid search over (H,ν)(H,ν) space or stochastic optimization.
+  5.4.2. Simulate MM paths for each candidate pair.
+  5.4.3. Average moments across simulations to compute objective.
+5.5. Discuss convergence, instability, or identifiability issues.
+
+6. Comparison of Model Outputs
+6.1. Generate volatility paths from each model (GARCH, HAR, Rough).
+6.2. Simulate one-step ahead forecasts, recursively or otherwise.
+6.3. Define evaluation metrics:
+  6.3.1. Mean Squared Error between forecasted and realized log-RV.
+  6.3.2. Relative RMSE or Diebold-Mariano test if applicable.
+  6.3.3. Matching of empirical ACF from forecast series.
+6.4. Plot and visually compare model outputs.
+6.5. Discuss how each model succeeds or fails in matching volatility dynamics.
+
+7. Robustness, Interpretation, and Limits
+7.1. Analyze residuals from MSM estimation.
+7.2. Evaluate robustness to changes in sampling window or truncation.
+7.3. Discuss the role of discretization error in rough model simulation.
+7.4. Acknowledge lack of closed-form likelihood for rough volatility models.
+7.5. Propose potential extensions:
+  7.5.1. Adding leverage effect.
+  7.5.2. Mean-reverting version of rough model.
+  7.5.3. Hybrid models with multiple volatility factors.

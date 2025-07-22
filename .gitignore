@@ -1,2 +1,13 @@
-/figures
-/papers
+# Ignore python cache files
+src/__pycache__
+
+# Ignore personal files
+backup.txt
+metodologia-indice-interno.txt
+roadmap-metodologia.txt
+
+# Ignore unhelpful files
+other/data
+other/figures
+other/papers
+notebooks
