@@ -39,7 +39,7 @@ def load_and_clean(raw_data_directory, file_pattern, output_path):
         
     return df
 
-def calculate_log_rv(df, price_col='Close', resample_freq='1D'):
+def calculate_log_rv(df, price_col='price', resample_freq='1D'):
     """
     Compute log realized volatility (lrv) from HF data.
 
@@ -72,12 +72,12 @@ def prepare_har_data(log_rv_series, freq='D'):
 
     if freq == 'D':
         periods_in_day = 1
-    elif freq == 'H':
-        periods_in_day = 24
+    elif freq == 'h':
+        periods_in_day = 1 * 24
     elif freq == '5min':
         periods_in_day = 24 * 12
     else:
-        raise ValueError("Freq not supported. Use 'D', 'H', or '5min'.")
+        raise ValueError("Freq not supported. Use 'D', 'h', or '5min'.")
     
     weekly_window = periods_in_day * 5
     monthly_window = periods_in_day * 22
@@ -89,4 +89,5 @@ def prepare_har_data(log_rv_series, freq='D'):
     df['monthly_lag'] = df['log_rv'].rolling(window=monthly_window).mean().shift(1)
     
     df.dropna(inplace=True)
+
     return df
