@@ -42,6 +42,7 @@ def load_and_clean(raw_data_directory, file_pattern, output_path):
 def calculate_log_rv(df, price_col='price', resample_freq='1D'):
     """
     Compute log realized volatility (lrv) from HF data.
+    Enhanced filtering for high-frequency data to remove non-trading periods.
 
     Args:
         df (pd.DataFrame): DF.
@@ -54,13 +55,97 @@ def calculate_log_rv(df, price_col='price', resample_freq='1D'):
 
     log_returns = np.log(df[price_col]).diff().dropna()
 
+    # For intraday frequencies, filter trading hours before computing RV
+    if resample_freq in ['5min', '5T', '1H', 'h']:
+        # Keep only weekdays
+        log_returns = log_returns[log_returns.index.weekday < 5]
+        
+        # Filter trading hours (9:30 AM - 4:00 PM EST)
+        if resample_freq in ['5min', '5T']:
+            log_returns = log_returns.between_time('09:30', '16:00')
+        elif resample_freq in ['1H', 'h']:
+            log_returns = log_returns.between_time('09:00', '16:00')
+        
+        print(f"After trading hours filter: {len(log_returns)} observations")
+
     squared_log_returns = log_returns**2
 
     realized_variance = squared_log_returns.resample(resample_freq).sum()
     
+    # Enhanced filtering for high-frequency data
+    if resample_freq in ['5min', '5T']:
+        # For 5-minute data, use more aggressive filtering
+        min_threshold = realized_variance.quantile(0.05)  # Bottom 5%
+        max_threshold = realized_variance.quantile(0.95)  # Top 5%
+        realized_variance = realized_variance[
+            (realized_variance > min_threshold) & 
+            (realized_variance < max_threshold)
+        ]
+        
+        # Additional filter: remove periods with too few observations per day
+        daily_counts = realized_variance.groupby(realized_variance.index.date).count()
+        valid_dates = daily_counts[daily_counts >= 50].index  # At least 50 obs per day
+        date_filter = pd.Series(realized_variance.index.date).isin(valid_dates)
+        realized_variance = realized_variance[date_filter.values]
+        
+    elif resample_freq in ['1H', 'h']:
+        # For hourly data
+        min_threshold = realized_variance.quantile(0.02)  # Bottom 2%
+        max_threshold = realized_variance.quantile(0.98)  # Top 2%
+        realized_variance = realized_variance[
+            (realized_variance > min_threshold) & 
+            (realized_variance < max_threshold)
+        ]
+        
+        # Additional filter: remove periods with too few observations per day
+        daily_counts = realized_variance.groupby(realized_variance.index.date).count()
+        valid_dates = daily_counts[daily_counts >= 5].index  # At least 5 obs per day
+        date_filter = pd.Series(realized_variance.index.date).isin(valid_dates)
+        realized_variance = realized_variance[date_filter.values]
+        
+    else:
+        # Daily data - original filtering
+        min_threshold = realized_variance.quantile(0.01)  # Bottom 1%
+        realized_variance = realized_variance[realized_variance > min_threshold]
+    
+    # Add small epsilon to prevent log(0)
+    epsilon = 1e-10
+    realized_variance = np.maximum(realized_variance, epsilon)
+    
     log_realized_variance = np.log(realized_variance)
     
+    # Remove extreme outliers
     log_realized_variance = log_realized_variance.replace([np.inf, -np.inf], np.nan).dropna()
+    
+    # Frequency-specific outlier filtering
+    if resample_freq in ['5min', '5T']:
+        # Tighter bounds for 5-minute data
+        Q1 = log_realized_variance.quantile(0.10)
+        Q3 = log_realized_variance.quantile(0.90)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 2 * IQR
+        upper_bound = Q3 + 2 * IQR
+    elif resample_freq in ['1H', 'h']:
+        # Moderate bounds for hourly data
+        Q1 = log_realized_variance.quantile(0.05)
+        Q3 = log_realized_variance.quantile(0.95)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 2.5 * IQR
+        upper_bound = Q3 + 2.5 * IQR
+    else:
+        # Original bounds for daily data
+        Q1 = log_realized_variance.quantile(0.25)
+        Q3 = log_realized_variance.quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 3 * IQR
+        upper_bound = Q3 + 3 * IQR
+    
+    log_realized_variance = log_realized_variance[
+        (log_realized_variance >= lower_bound) & 
+        (log_realized_variance <= upper_bound)
+    ]
+    
+    print(f"Filtered log-RV for {resample_freq}: {len(log_realized_variance)} observations, range [{log_realized_variance.min():.3f}, {log_realized_variance.max():.3f}]")
     
     return log_realized_variance
 

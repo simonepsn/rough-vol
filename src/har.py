@@ -54,7 +54,9 @@ def forecast_har_rolling(har_data_complete, horizon, window_size=252, last_log_r
             next_pred = model_fit.predict(X_forecast).iloc[0]
             
         except Exception as e:
-            print(f"Error estimating HAR model: {e}")
+            print(f"Error estimating HAR model at step {i}: {e}")
+            # Use historical mean as fallback
+            next_pred = window_data['log_rv'].mean()
         
         forecasts.append(next_pred)
         forecast_dates.append(har_data_complete.index[current_idx])

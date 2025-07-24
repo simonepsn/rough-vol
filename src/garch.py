@@ -47,7 +47,9 @@ def forecast_garch_rolling(log_returns_series, horizon, window_size=252, last_lo
             log_predicted_variance = np.log(predicted_variance / (100**2))
             
         except Exception as e:
-            print(f"Error estimating GARCH model: {e}")
+            print(f"Error estimating GARCH model at step {i}: {e}")
+            # Use historical variance as fallback
+            log_predicted_variance = np.log(window_returns.var())
         
         forecasts.append(log_predicted_variance)
         forecast_dates.append(log_returns_series.index[current_idx])
