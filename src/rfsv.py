@@ -62,6 +62,21 @@ def build_fbm_covariance_matrix(times, h):
 def forecast_RFSV(past_log_rv_series, h, nu, horizon, freq, truncation_window=252, n_sims=1, use_last_value=True, index=None):
     """
     RFSV forecast starting from the last observed value.
+    
+    Args:
+        past_log_rv_series (pd.Series): Series.
+        h (int): Estimated Hurst parameter.
+        nu (int): Estimated vol-of-vol parameter.
+        horizon (int): Forecast horizon.
+        freq (str): Frequency of the forecast.
+        truncation_window (int): Number of past observations to consider.
+        n_sims (int): Number of simulations to run.
+        use_last_value (bool): Whether to use the last observed value to shift the forecast.
+        index (pd.DatetimeIndex): Index for the forecast series.
+
+    Returns:
+        forecast_series (pd.Series): Forecasted series.
+
     """
     if len(past_log_rv_series) > truncation_window:
         past_log_rv_series_truncated = past_log_rv_series.iloc[-truncation_window:]
@@ -110,7 +125,7 @@ def forecast_RFSV(past_log_rv_series, h, nu, horizon, freq, truncation_window=25
     if index is not None:
         forecast_series.index = index
         
-    return forecast_series
+    return forecast_series  
 
 # THIS METHOD IS NOT WORKING FOR NOW, KEEPING IT JUST FOR FUTURE ANALYSIS
 # ESTIMATES ARE ALWAYS (0.82-0.9) FOR H, ONLY WHEN UPPER BOUND IS HIGH ENOUGH 

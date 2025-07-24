@@ -4,8 +4,8 @@ import pandas as pd
 from src.analysis_visualization import (
     plot_forecast_comparison, 
     plot_metrics_comparison, 
-    plot_error_analysis, 
     evaluate_forecasts,
+    plot_error_diagnostics,
     vol_scaler
 )
 
@@ -42,13 +42,13 @@ forecast_garch_h_scaled = vol_scaler(forecast_df_h['GARCH'], freq='h')
 forecast_har_h_scaled = vol_scaler(forecast_df_h['HAR'], freq='h')
 forecast_rfsv_h_scaled = vol_scaler(forecast_df_h['RFSV'], freq='h')
 
-# forecast_garch_5m_scaled = vol_scaler(forecast_garch_5m, freq='5min')
-forecast_har_5m_scaled = vol_scaler(forecast_df_5m['HAR'], freq='5min')
-forecast_rfsv_5m_scaled = vol_scaler(forecast_df_5m['RFSV'], freq='5min')
+# forecast_garch_5m_scaled = vol_scaler(forecast_garch_5m, freq='5m')
+forecast_har_5m_scaled = vol_scaler(forecast_df_5m['HAR'], freq='5m')
+forecast_rfsv_5m_scaled = vol_scaler(forecast_df_5m['RFSV'], freq='5m')
 
 actuals_d_scaled = vol_scaler(actuals_d, freq='D')
 actuals_h_scaled = vol_scaler(actuals_h, freq='h')
-actuals_5m_scaled = vol_scaler(actuals_5m, freq='5min')
+actuals_5m_scaled = vol_scaler(actuals_5m, freq='5m')
 
 
 forecasts_d_dict = {
@@ -84,7 +84,7 @@ fig_d.savefig("forecast_results/plots/daily_forecast_comparison.png", dpi=500)
 fig_metrics_d = plot_metrics_comparison(rmse_d, qlike_d, freq='Daily')
 fig_metrics_d.savefig("forecast_results/plots/daily_metrics_comparison.png", dpi=500)
 
-fig_error_d = plot_error_analysis(actuals_d_scaled, forecasts_d_dict, freq='Daily')
+fig_error_d = plot_error_diagnostics(actuals_d_scaled, forecasts_d_dict, freq='Daily')
 fig_error_d.savefig("forecast_results/plots/daily_metrics_errors.png", dpi=500)
 
 # Hourly Results
@@ -95,7 +95,7 @@ fig_h.savefig("forecast_results/plots/hourly_forecast_comparison.png", dpi=500)
 fig_metrics_h = plot_metrics_comparison(rmse_h, qlike_h, freq='Hourly')
 fig_metrics_h.savefig("forecast_results/plots/hourly_metrics_comparison.png", dpi=500)
 
-fig_error_h = plot_error_analysis(actuals_h_scaled, forecasts_h_dict, freq='Hourly')
+fig_error_h = plot_error_diagnostics(actuals_h_scaled, forecasts_h_dict, freq='Hourly')
 fig_error_h.savefig("forecast_results/plots/hourly_metrics_errors.png", dpi=500)
 
 # 5-Minute Results
@@ -106,7 +106,7 @@ fig_5m.savefig("forecast_results/plots/5minutes_forecast_comparison.png", dpi=50
 fig_metrics_5m = plot_metrics_comparison(rmse_5m, qlike_5m, freq='5minutes')
 fig_metrics_5m.savefig("forecast_results/plots/5minutes_metrics_comparison.png", dpi=500)
 
-fig_error_5m = plot_error_analysis(actuals_5m_scaled, forecasts_5m_dict, freq='5minutes')
+fig_error_5m = plot_error_diagnostics(actuals_5m_scaled, forecasts_5m_dict, freq='5minutes')
 fig_error_5m.savefig("forecast_results/plots/5minutes_metrics_errors.png", dpi=500)
 
 print("Analysis and visualizations completed successfully!")

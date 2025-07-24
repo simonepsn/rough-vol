@@ -1,22 +1,22 @@
 import numpy as np
 import pandas as pd
+import warnings
 
 from src.data_preparation import load_and_clean, calculate_log_rv, prepare_har_data
-from src.garch import estimate_garch, forecast_garch, forecast_garch_rolling
+from src.garch import forecast_garch_rolling
 from src.har import forecast_har_rolling
-from src.rfsv import estimate_h_loglog, build_fbm_covariance_matrix ,forecast_RFSV
+from src.rfsv import estimate_h_loglog, forecast_RFSV
 from src.analysis_visualization import (
-    qlike_loss, 
-    evaluate_forecasts, 
-    plot_forecast_comparison, 
-    plot_metrics_comparison, 
-    plot_error_analysis
+    evaluate_forecasts
 )
+
 
 
 # ==============================================================================
 #                               --- SETUP ---
 # ==============================================================================
+
+warnings.filterwarnings("ignore")
 
 raw_dir = 'other/data/raw_data'
 output_path = 'other/data/df.csv'
@@ -29,6 +29,8 @@ holdout_days = 25
 # ==============================================================================
 
 df = load_and_clean(raw_data_directory=raw_dir, file_pattern='SPX*.csv', output_path=output_path)
+
+df = df['2011-01-01':'2018-12-31']
 
 # GARCH inputs
 price_d = df['price'].resample('D').last()
@@ -50,7 +52,7 @@ har_5m_data = prepare_har_data(lrv_5m, freq='5min')
 
 
 
-# SPLIT DATA INTO TRAINING AND HOLDOUT (TEST) SETS
+# SPLIT DATA INTO TRAINING AND TEST SETS
 
 # Daily
 train_lret_d = lret_d[:-holdout_days]
