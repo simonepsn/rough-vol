@@ -160,7 +160,7 @@ def prepare_har_data(log_rv_data, freq='D', ticker=None):
         # Single series, treat as one ticker
         return prepare_single_ticker_har(log_rv_data, 'default')
     
-    # Multiple tickers case
+    # Multiple tickers case, easier to handle with different lengths
     har_data_dict = {}
     
     for ticker_name in log_rv_data.columns:

@@ -171,4 +171,4 @@ def rolling_forecast_rfsv(
         forecast = forecast_single_step(window.values, h, nu, horizon, n_sims)
     
     # Return the forecasts as a pandas Series with a default integer index
-    return pd.Series(forecast, name="RFSV_Forecast")
+    return pd.Series(forecast)

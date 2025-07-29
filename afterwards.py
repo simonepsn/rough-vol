@@ -13,7 +13,8 @@ from src.analysis_visualization import (
     create_summary_table,
     vol_scaler,
     create_performance_heatmap,
-    create_model_comparison_plot
+    create_model_comparison_plot,
+    get_model_output_type
 )
 
 # ==============================================================================
@@ -153,16 +154,14 @@ for ticker in tickers:
             all_ticker_summaries['daily'][ticker] = results_d
             
             # Scale for visualization
-            actuals_d_scaled = vol_scaler(actuals_d, freq='D')
+            actuals_d_scaled = vol_scaler(actuals_d, freq='D', modeltype='RFSV')
             forecasts_d_scaled = {}
             for model, forecast in forecasts_d_dict.items():
-                forecasts_d_scaled[model] = vol_scaler(forecast, freq='D')
+                forecasts_d_scaled[model] = vol_scaler(forecast, freq='D', modeltype=get_model_output_type(model))
             
             # Create plots
-            fig_d = plot_forecast_comparison(actuals_d_scaled, forecasts_d_scaled, freq='D')
-            fig_d.suptitle(f'{ticker} - Daily Volatility Forecasts', fontsize=16)
-            fig_d.savefig(f"forecast_results/plots/individual_tickers/{ticker}_daily_forecast.png", 
-                         dpi=300, bbox_inches='tight')
+            fig_d = plot_forecast_comparison(actuals_d_scaled, forecasts_d_scaled, freq='D', ticker_name=ticker)
+            fig_d.savefig(f"forecast_results/plots/individual_tickers/{ticker}_daily_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_d)
             
             print(f"  Daily {ticker} - RMSE: {dict(results_d['RMSE'])}")
@@ -188,16 +187,14 @@ for ticker in tickers:
             all_ticker_summaries['hourly'][ticker] = results_h
             
             # Scale for visualization
-            actuals_h_scaled = vol_scaler(actuals_h, freq='h')
+            actuals_h_scaled = vol_scaler(actuals_h, freq='h', modeltype='RFSV')
             forecasts_h_scaled = {}
             for model, forecast in forecasts_h_dict.items():
-                forecasts_h_scaled[model] = vol_scaler(forecast, freq='h')
+                forecasts_h_scaled[model] = vol_scaler(forecast, freq='h', modeltype=get_model_output_type(model))
             
             # Create plots
-            fig_h = plot_forecast_comparison(actuals_h_scaled, forecasts_h_scaled, freq='h')
-            fig_h.suptitle(f'{ticker} - Hourly Volatility Forecasts', fontsize=16)
-            fig_h.savefig(f"forecast_results/plots/individual_tickers/{ticker}_hourly_forecast.png", 
-                         dpi=300, bbox_inches='tight')
+            fig_h = plot_forecast_comparison(actuals_h_scaled, forecasts_h_scaled, freq='h', ticker_name=ticker)
+            fig_h.savefig(f"forecast_results/plots/individual_tickers/{ticker}_hourly_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_h)
             
             print(f"  Hourly {ticker} - RMSE: {dict(results_h['RMSE'])}")
@@ -221,16 +218,14 @@ for ticker in tickers:
             all_ticker_summaries['5min'][ticker] = results_5m
             
             # Scale for visualization
-            actuals_5m_scaled = vol_scaler(actuals_5m, freq='5T')
+            actuals_5m_scaled = vol_scaler(actuals_5m, freq='5T', modeltype='RFSV')
             forecasts_5m_scaled = {}
             for model, forecast in forecasts_5m_dict.items():
-                forecasts_5m_scaled[model] = vol_scaler(forecast, freq='5T')
+                forecasts_5m_scaled[model] = vol_scaler(forecast, freq='5T', modeltype=get_model_output_type(model))
             
             # Create plots
-            fig_5m = plot_forecast_comparison(actuals_5m_scaled, forecasts_5m_scaled, freq='5T')
-            fig_5m.suptitle(f'{ticker} - 5-Minute Volatility Forecasts', fontsize=16)
-            fig_5m.savefig(f"forecast_results/plots/individual_tickers/{ticker}_5min_forecast.png", 
-                          dpi=300, bbox_inches='tight')
+            fig_5m = plot_forecast_comparison(actuals_5m_scaled, forecasts_5m_scaled, freq='5T', ticker_name=ticker)
+            fig_5m.savefig(f"forecast_results/plots/individual_tickers/{ticker}_5min_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_5m)
             
             print(f"  5-min {ticker} - RMSE: {dict(results_5m['RMSE'])}")
@@ -256,7 +251,7 @@ for freq_name, freq_summaries in all_ticker_summaries.items():
                 combined_results.append({
                     'Ticker': ticker,
                     'Model': model,
-                    'RMSE': results_df.loc[model, 'RMSE'] # Only RMSE
+                    'RMSE': results_df.loc[model, 'RMSE']
                 })
         
         if combined_results:
@@ -268,7 +263,7 @@ for freq_name, freq_summaries in all_ticker_summaries.items():
                 model_data = summary_df[summary_df['Model'] == model].nsmallest(3, 'RMSE')
                 print(f"  {model}:")
                 for _, row in model_data.iterrows():
-                    print(f"    {row['Ticker']}: RMSE={row['RMSE']:.4f}") # Only RMSE
+                    print(f"    {row['Ticker']}: RMSE={row['RMSE']:.4f}")
             
             # Save detailed results
             summary_df.to_csv(f"forecast_results/individual_ticker_results_{freq_name}.csv", index=False)

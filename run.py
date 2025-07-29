@@ -7,7 +7,7 @@ import os
 
 os.chdir(os.path.abspath("/home/simonepsn/Desktop/rough-vol/")) 
 
-from src.data_preparation import load_and_clean, calculate_log_rv, prepare_har_data
+from src.data_preparation import calculate_log_rv, prepare_har_data
 from src.garch import forecast_garch_rolling
 from src.har import forecast_har_rolling
 from src.rfsv import rolling_forecast_rfsv
@@ -41,6 +41,7 @@ print(f"Available tickers: {[col.replace('_close', '') for col in df_d.columns i
 
 # Calculate log returns for each ticker (for GARCH)
 print("\nCalculating log returns for all tickers...")
+
 lret_daily_data = {}
 lret_hourly_data = {}
 lret_5min_data = {}
@@ -85,6 +86,12 @@ window_sizes = {}
 
 train_lret_d = lret_d.iloc[:-holdout_period]
 train_lrv_d = lrv_d.iloc[:-holdout_period]
+
+train_har_d = {
+    ticker: df.iloc[:-holdout_period].copy()
+    for ticker, df in har_d_data.items()
+}
+
 actuals_d = lrv_d.iloc[-holdout_period:]
 window_size_d = min(len(train_lrv_d) // 2, 252)
 analysis_frequencies.append('daily')
@@ -94,6 +101,12 @@ print(f"Daily analysis enabled: {len(train_lrv_d)} training obs, {len(actuals_d)
 # Hourly data
 train_lret_h = lret_h.iloc[:-holdout_period]
 train_lrv_h = lrv_h.iloc[:-holdout_period]
+
+train_har_h = {
+    ticker: df.iloc[:-holdout_period].copy()
+    for ticker, df in har_h_data.items()
+}
+
 actuals_h = lrv_h.iloc[-holdout_period:]
 window_size_h = min(len(train_lrv_h) // 2, 252)
 analysis_frequencies.append('hourly')
@@ -103,6 +116,12 @@ print(f"Hourly analysis enabled: {len(train_lrv_h)} training obs, {len(actuals_h
 # 5-minute data
 train_lret_5m = lret_5m.iloc[:-holdout_period]
 train_lrv_5m = lrv_5m.iloc[:-holdout_period]
+
+train_har_5m = {
+    ticker: df.iloc[:-holdout_period].copy()
+    for ticker, df in har_5m_data.items()
+}
+
 actuals_5m = lrv_5m.iloc[-holdout_period:]
 window_size_5m = min(len(train_lrv_5m) // 2, 252)
 analysis_frequencies.append('5min')
@@ -146,39 +165,43 @@ if 'daily' in analysis_frequencies:
         print(f"Processing ticker: {ticker}")
         
         # Get ticker-specific data
-        ticker_lret_d = lret_d[ticker]
+        ticker_lret_d = train_lret_d[ticker]
         ticker_lrv_d = train_lrv_d[ticker]
-        ticker_har_d = har_d_data[ticker]
+        ticker_har_d = train_har_d[ticker]
         ticker_actuals_d = actuals_d[ticker]
         
         # GARCH
         try:
-            forecast_garch_d[ticker] = forecast_garch_rolling(
+            forecast_garch = forecast_garch_rolling(
                 ticker_lret_d, 
                 horizon=holdout_period, 
                 window_size=window_sizes['daily'], 
                 last_log_rv=ticker_lrv_d.iloc[-1]
             )
+
+            forecast_garch_d[ticker] = forecast_garch.set_axis(ticker_actuals_d.index)
+
         except Exception as e:
             print(f"GARCH error for {ticker}: {e}")
-            forecast_garch_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
         
         # HAR
         try:
-            forecast_har_d[ticker] = forecast_har_rolling(
+            forecast_har = forecast_har_rolling(
                 ticker_har_d, 
                 horizon=holdout_period, 
                 window_size=window_sizes['daily'], 
                 last_log_rv=ticker_lrv_d.iloc[-1]
             )
+
+            forecast_har_d[ticker] = forecast_har.set_axis(ticker_actuals_d.index)
+
         except Exception as e:
             print(f"HAR error for {ticker}: {e}")
-            forecast_har_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
         
         # RFSV
         try:
             scales_d = [1, 2, 4, 8, 16, 22]
-            forecast_rfsv_d[ticker] = rolling_forecast_rfsv(
+            forecast = rolling_forecast_rfsv(
                 ticker_lrv_d, 
                 scales=scales_d, 
                 horizon=holdout_period, 
@@ -186,9 +209,11 @@ if 'daily' in analysis_frequencies:
                 n_sims=5, 
                 freq='D'
             )
+            
+            forecast_rfsv_d[ticker] = forecast.set_axis(ticker_actuals_d.index)
+
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
-            forecast_rfsv_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
     
     # Create summary DataFrames (using first ticker as representative)
     forecast_df_d = pd.DataFrame()
@@ -226,39 +251,43 @@ if 'hourly' in analysis_frequencies:
         print(f"Processing ticker: {ticker}")
         
         # Get ticker-specific data
-        ticker_lret_h = lret_h[ticker]
+        ticker_lret_h = train_lret_h[ticker]
         ticker_lrv_h = train_lrv_h[ticker]
-        ticker_har_h = har_h_data[ticker]
+        ticker_har_h = train_har_h[ticker]
         ticker_actuals_h = actuals_h[ticker]
         
         # GARCH
         try:
-            forecast_garch_h[ticker] = forecast_garch_rolling(
+            forecast_garch = forecast_garch_rolling(
                 ticker_lret_h, 
                 horizon=holdout_period, 
                 window_size=window_sizes['hourly'], 
                 last_log_rv=ticker_lrv_h.iloc[-1]
             )
+
+            forecast_garch_h[ticker] = forecast_garch.set_axis(ticker_actuals_h.index)
+
         except Exception as e:
             print(f"GARCH error for {ticker}: {e}")
-            forecast_garch_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
-        
+
         # HAR
         try:
-            forecast_har_h[ticker] = forecast_har_rolling(
+            forecast_har = forecast_har_rolling(
                 ticker_har_h, 
                 horizon=holdout_period, 
                 window_size=window_sizes['hourly'], 
                 last_log_rv=ticker_lrv_h.iloc[-1]
             )
+
+            forecast_har_h[ticker] = forecast_har.set_axis(ticker_actuals_h.index)
+
         except Exception as e:
-            print(f"HAR error for {ticker}: {e}")
-            forecast_har_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
-        
+            print(f"HAR error for {ticker}: {e}")       
+
         # RFSV
         try:
             scales_h = [1, 2, 4, 8, 16, 32, 48]
-            forecast_rfsv_h[ticker] = rolling_forecast_rfsv(
+            forecast = rolling_forecast_rfsv(
                 ticker_lrv_h, 
                 scales=scales_h, 
                 horizon=holdout_period, 
@@ -266,10 +295,12 @@ if 'hourly' in analysis_frequencies:
                 n_sims=5, 
                 freq='h'
             )
+
+            forecast_rfsv_h[ticker] = forecast.set_axis(ticker_actuals_h.index)
+
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
-            forecast_rfsv_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
-       
+
     forecast_df_h = pd.DataFrame()
 
     for ticker in tickers:
@@ -304,39 +335,44 @@ if '5min' in analysis_frequencies:
         print(f"Processing ticker: {ticker}")
         
         # Get ticker-specific data
-        ticker_lret_5m = lret_5m[ticker] if ticker in lret_5m.columns else None
+        ticker_lret_5m = train_lret_5m[ticker] if ticker in lret_5m.columns else None
         ticker_lrv_5m = train_lrv_5m[ticker]
-        ticker_har_5m = har_5m_data[ticker]
+        ticker_har_5m = train_har_5m[ticker]
         ticker_actuals_5m = actuals_5m[ticker]
-        
-        # GARCH (commented out for computational efficiency)
+
+        # GARCH (commented because GARCH is not implemented for 5-minute data for statistical reasons)
+        #
         # try:
-        #     forecast_garch_5m[ticker] = forecast_garch_rolling(
+        #     forecast_garch = forecast_garch_rolling(
         #         ticker_lret_5m, 
         #         horizon=holdout_period, 
         #         window_size=window_sizes['5min'], 
         #         last_log_rv=ticker_lrv_5m.iloc[-1]
         #     )
+        #
+        #     forecast_garch_5m[ticker] = forecast_garch.set_axis(ticker_actuals_5m.index)
+        #
         # except Exception as e:
         #     print(f"GARCH error for {ticker}: {e}")
-        #     forecast_garch_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
         
         # HAR
         try:
-            forecast_har_5m[ticker] = forecast_har_rolling(
+            forecast_har = forecast_har_rolling(
                 ticker_har_5m, 
                 horizon=holdout_period, 
                 window_size=window_sizes['5min'], 
                 last_log_rv=ticker_lrv_5m.iloc[-1]
             )
+
+            forecast_har_5m[ticker] = forecast_har.set_axis(ticker_actuals_5m.index)
+
         except Exception as e:
             print(f"HAR error for {ticker}: {e}")
-            forecast_har_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
         
         # RFSV
         try:
             scales_5m = [1, 2, 4, 8, 16, 32, 64, 128]
-            forecast_rfsv_5m[ticker] = rolling_forecast_rfsv(
+            forecast = rolling_forecast_rfsv(
                 ticker_lrv_5m, 
                 scales=scales_5m, 
                 horizon=holdout_period, 
@@ -344,9 +380,11 @@ if '5min' in analysis_frequencies:
                 n_sims=5, 
                 freq='5min'
             )
+
+            forecast_rfsv_5m[ticker] = forecast.set_axis(ticker_actuals_5m.index)
+
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
-            forecast_rfsv_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
     
     # Create summary DataFrame - only using HAR and RFSV for 5-minute (GARCH skipped)
     forecast_df_5m = pd.DataFrame()

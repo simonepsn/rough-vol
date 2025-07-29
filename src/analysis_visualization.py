@@ -59,6 +59,8 @@ def evaluate_forecasts(actuals, forecasts_df, freq='D'):
     })
     
     return results_summary, rmse_df
+
+
 def plot_forecast_comparison(actuals: pd.Series, forecasts_dict: dict, freq: str, ticker_name: str = "Unknown Ticker"):
     """
     Plots actual values vs. forecasted paths from different models with robust filtering and error handling.
@@ -93,54 +95,50 @@ def plot_forecast_comparison(actuals: pd.Series, forecasts_dict: dict, freq: str
 
     # Get common index among actuals and all valid forecasts
     common_index = actuals.index
-    for model_name, forecast_series in valid_forecasts_dict.items():
+    for forecast_series in valid_forecasts_dict.values():
         common_index = common_index.intersection(forecast_series.index)
     
     if common_index.empty:
         print(f"Warning: No common index found between actuals and forecasts for {ticker_name} ({freq}). Skipping plot_forecast_comparison.")
         return None
 
+
     actuals_plot = actuals.loc[common_index]
-    forecasts_plot = {model: valid_forecasts_dict[model].loc[common_index] 
-                      for model in valid_forecasts_dict.keys()}
+    forecasts_plot = {model: s.loc[common_index] for model, s in valid_forecasts_dict.items()}
 
     # Final check: if actuals_plot is empty or all NaN after alignment, skip plotting
     if actuals_plot.empty or actuals_plot.isna().all():
         print(f"Warning: Actuals data is empty or all NaN for {ticker_name} ({freq}) after alignment. Skipping plot_forecast_comparison.")
         return None
 
-    plt.figure(figsize=(14, 7))
-    
-    # Determine sampling frequency for high-frequency data to avoid overly dense plots
+
+    # Sample for better visualization if needed
     sample_freq = 1
     if freq in ['5min', '5T', '5m'] and len(actuals_plot) > 1000:
-        sample_freq = max(1, len(actuals_plot) // 500)  # Aim for max ~500 points
+        sample_freq = max(1, len(actuals_plot) // 500)
     elif freq in ['h', 'H', 'Hourly'] and len(actuals_plot) > 200:
-        sample_freq = max(1, len(actuals_plot) // 200) # Aim for max ~200 points
+        sample_freq = max(1, len(actuals_plot) // 200)
 
     actuals_sample = actuals_plot.iloc[::sample_freq]
-    forecasts_sample = {model: series.iloc[::sample_freq] 
-                        for model, series in forecasts_plot.items()}
+    forecasts_sample = {m: s.iloc[::sample_freq] for m, s in forecasts_plot.items()}
+
     
-    # Plot actual values
-    plt.plot(actuals_sample.index, actuals_sample.values, 
-             label='Real Value', color='black', linewidth=1.5, alpha=0.8)
-    
-    # Plot forecasted values
-    for model_name, forecast_series in forecasts_sample.items():
-        plt.plot(forecast_series.index, forecast_series.values, 
-                 label=model_name, linestyle='--', alpha=0.7)
-    
-    plt.title(f'{ticker_name} - Forecasted vs Observed (Frequency: {freq})', fontsize=16)
-    plt.xlabel('Date')
-    plt.ylabel('Annualized Volatility (%)')
-    plt.legend()
-    plt.grid(True, alpha=0.5)
-    
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    
-    return plt.gcf()
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    ax.plot(actuals_sample.index, actuals_sample.values, label='Real Value', color='black', linewidth=1.5)
+
+    for model_name, series in forecasts_sample.items():
+        ax.plot(series.index, series.values, linestyle='--', label=model_name, alpha=0.8)
+
+    ax.set_title(f'{ticker_name} - Forecast vs Actual ({freq})', fontsize=16)
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Annualized Volatility (%)')
+    ax.legend()
+    ax.grid(True, alpha=0.5)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    return fig
 
 
 def simple_evaluate_single_ticker(actuals: pd.Series, forecasts_dict: dict) -> pd.DataFrame:
@@ -149,7 +147,7 @@ def simple_evaluate_single_ticker(actuals: pd.Series, forecasts_dict: dict) -> p
     Includes checks for data validity (length, NaNs).
 
     Args:
-        actuals (pd.Series): The true future values.
+        actuals (pd.Series): The true "future" values.
         forecasts_dict (dict): A dictionary where keys are model names (str) and values are
                                pd.Series representing forecasts from that model.
 
@@ -315,7 +313,7 @@ def plot_error_diagnostics(actuals, forecasts_dict, freq=''):
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     return fig
 
-def vol_scaler(log_rv_df, freq):
+def vol_scaler(log_rv_df, freq, modeltype):
     """
     Transforms log realized volatility to annualized volatility in percentage terms.
     Uses more robust scaling for high-frequency data to prevent unrealistic values.
@@ -326,29 +324,26 @@ def vol_scaler(log_rv_df, freq):
         pd.Series: Annualized volatility in percentage terms.
     """
     ann_factors = {
-        'D': 252,
-        'Daily': 252,
-        'h': 252 * 8,
-        'H': 252 * 8,
-        'Hourly': 252 * 8,
-        '5m': 252 * 8 * 12,
-        '5min': 252 * 8 * 12,
-        '5T': 252 * 8 * 12,
-        '5-Minutes': 252 * 8 * 12
+        'D': 250,
+        'Daily': 250,
+        'h': 250 * 6,
+        'H': 250 * 6,
+        'Hourly': 250 * 6,
+        '5m': 250 * 6 * 12,
+        '5min': 250 * 6 * 12,
+        '5T': 250 * 6 * 12,
+        '5-Minutes': 250 * 6 * 12
     }
     
-    if freq not in ann_factors:
-        print(f"Warning: Frequency '{freq}' not recognized. Available: {list(ann_factors.keys())}")
-        factor = 252  # Default to daily
-    else:
-        factor = ann_factors[freq]
+    factor = ann_factors[freq]
 
-    
-    rv = np.exp(log_rv_df)
-    rvol = np.sqrt(rv)
-    ann_vol_pct = rvol * np.sqrt(factor) * 100
-    
-    return ann_vol_pct
+    if modeltype in ['HAR', 'GARCH']:
+        rv = np.exp(log_rv_df)
+        return np.sqrt(rv) * np.sqrt(factor) * 100
+    elif modeltype == 'RFSV':
+        return np.exp(log_rv_df) * np.sqrt(factor) * 100
+    else:
+        raise ValueError(f"Unsupported model type: {modeltype}. Supported types are: HAR, RFSV, GARCH.")
 
 
 def calculate_comprehensive_metrics(forecasts_dict, actuals_dict, tickers):
@@ -492,3 +487,14 @@ def create_model_comparison_plot(summary_df, freq_name):
     
     plt.tight_layout()
     return fig
+
+def get_model_output_type(model_name):
+    model_name = model_name.upper()
+    if model_name == 'GARCH':
+        return 'GARCH'
+    elif model_name == 'HAR':
+        return 'HAR'
+    elif model_name == 'RFSV':
+        return 'RFSV'
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")
