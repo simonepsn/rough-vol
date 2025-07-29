@@ -39,140 +39,139 @@ def load_and_clean(raw_data_directory, file_pattern, output_path):
         
     return df
 
-def calculate_log_rv(df, price_col='price', resample_freq='1D'):
+def calculate_log_rv(df, resample_freq='1D', ticker_col=None):
     """
-    Compute log realized volatility (lrv) from HF data.
-    Enhanced filtering for high-frequency data to remove non-trading periods.
-
+    Calculate log realized variance using intraday returns for multiple tickers.
+    
     Args:
-        df (pd.DataFrame): DF.
-        price_col (str): price column.
-        resample_freq (str): Resampling frequency (es. '1D', '4H', '1H').
-
+        df (pd.DataFrame): DataFrame with datetime index and ticker columns
+        resample_freq (str): Frequency for resampling ('1D', '1h', '5min')
+        ticker_col (str): If specified, calculate for single ticker only
+    
     Returns:
-        pd.Series: pd.series log realized volatility with timestamp.
+        pd.DataFrame or pd.Series: Log realized variance for all tickers or single ticker
     """
-
-    log_returns = np.log(df[price_col]).diff().dropna()
-
-    # For intraday frequencies, filter trading hours before computing RV
-    if resample_freq in ['5min', '5T', '1H', 'h']:
-        # Keep only weekdays
-        log_returns = log_returns[log_returns.index.weekday < 5]
-        
-        # Filter trading hours (9:30 AM - 4:00 PM EST)
-        if resample_freq in ['5min', '5T']:
-            log_returns = log_returns.between_time('09:30', '16:00')
-        elif resample_freq in ['1H', 'h']:
-            log_returns = log_returns.between_time('09:00', '16:00')
-        
-        print(f"After trading hours filter: {len(log_returns)} observations")
-
-    squared_log_returns = log_returns**2
-
-    realized_variance = squared_log_returns.resample(resample_freq).sum()
-    
-    # Enhanced filtering for high-frequency data
-    if resample_freq in ['5min', '5T']:
-        # For 5-minute data, use more aggressive filtering
-        min_threshold = realized_variance.quantile(0.05)  # Bottom 5%
-        max_threshold = realized_variance.quantile(0.95)  # Top 5%
-        realized_variance = realized_variance[
-            (realized_variance > min_threshold) & 
-            (realized_variance < max_threshold)
-        ]
-        
-        # Additional filter: remove periods with too few observations per day
-        daily_counts = realized_variance.groupby(realized_variance.index.date).count()
-        valid_dates = daily_counts[daily_counts >= 50].index  # At least 50 obs per day
-        date_filter = pd.Series(realized_variance.index.date).isin(valid_dates)
-        realized_variance = realized_variance[date_filter.values]
-        
-    elif resample_freq in ['1H', 'h']:
-        # For hourly data
-        min_threshold = realized_variance.quantile(0.02)  # Bottom 2%
-        max_threshold = realized_variance.quantile(0.98)  # Top 2%
-        realized_variance = realized_variance[
-            (realized_variance > min_threshold) & 
-            (realized_variance < max_threshold)
-        ]
-        
-        # Additional filter: remove periods with too few observations per day
-        daily_counts = realized_variance.groupby(realized_variance.index.date).count()
-        valid_dates = daily_counts[daily_counts >= 5].index  # At least 5 obs per day
-        date_filter = pd.Series(realized_variance.index.date).isin(valid_dates)
-        realized_variance = realized_variance[date_filter.values]
-        
-    else:
-        # Daily data - original filtering
-        min_threshold = realized_variance.quantile(0.01)  # Bottom 1%
-        realized_variance = realized_variance[realized_variance > min_threshold]
-    
-    # Add small epsilon to prevent log(0)
     epsilon = 1e-10
-    realized_variance = np.maximum(realized_variance, epsilon)
     
-    log_realized_variance = np.log(realized_variance)
+    if ticker_col is not None:
+        # Single ticker calculation
+        if ticker_col not in df.columns:
+            raise ValueError(f"Column {ticker_col} not found in DataFrame")
+        
+        price_series = pd.to_numeric(df[ticker_col], errors='coerce').dropna()
+        log_returns = np.log(price_series / price_series.shift(1)).dropna()
+        squared_log_returns = log_returns ** 2
+        realized_variance = squared_log_returns.resample(resample_freq).sum()
+        log_realized_variance = np.log(realized_variance + epsilon)
+        
+        return log_realized_variance
     
-    # Remove extreme outliers
-    log_realized_variance = log_realized_variance.replace([np.inf, -np.inf], np.nan).dropna()
-    
-    # Frequency-specific outlier filtering
-    if resample_freq in ['5min', '5T']:
-        # Tighter bounds for 5-minute data
-        Q1 = log_realized_variance.quantile(0.10)
-        Q3 = log_realized_variance.quantile(0.90)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 2 * IQR
-        upper_bound = Q3 + 2 * IQR
-    elif resample_freq in ['1H', 'h']:
-        # Moderate bounds for hourly data
-        Q1 = log_realized_variance.quantile(0.05)
-        Q3 = log_realized_variance.quantile(0.95)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 2.5 * IQR
-        upper_bound = Q3 + 2.5 * IQR
     else:
-        # Original bounds for daily data
-        Q1 = log_realized_variance.quantile(0.25)
-        Q3 = log_realized_variance.quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 3 * IQR
-        upper_bound = Q3 + 3 * IQR
-    
-    log_realized_variance = log_realized_variance[
-        (log_realized_variance >= lower_bound) & 
-        (log_realized_variance <= upper_bound)
-    ]
-    
-    print(f"Filtered log-RV for {resample_freq}: {len(log_realized_variance)} observations, range [{log_realized_variance.min():.3f}, {log_realized_variance.max():.3f}]")
-    
-    return log_realized_variance
+        # Multi-ticker calculation
+        log_rv_dict = {}
+        
+        for col in df.columns:
+            try:
+                price_series = pd.to_numeric(df[col], errors='coerce').dropna()
+                
+                if len(price_series) < 10:  # Skip if insufficient data
+                    print(f"Skipping {col}: insufficient data ({len(price_series)} observations)")
+                    continue
+                
+                # Calculate log returns
+                log_returns = np.log(price_series / price_series.shift(1)).dropna()
+                
+                # Calculate squared log returns
+                squared_log_returns = log_returns ** 2
+                
+                # Resample to desired frequency and sum to get realized variance
+                realized_variance = squared_log_returns.resample(resample_freq).sum()
+                
+                # Take log of realized variance
+                log_realized_variance = np.log(realized_variance + epsilon)
+                
+                # Extract ticker name from column (remove '_close' suffix)
+                ticker_name = col.replace('_close', '') if '_close' in col else col
+                log_rv_dict[ticker_name] = log_realized_variance
+                
+                print(f"Calculated log RV for {ticker_name}: {len(log_realized_variance)} observations")
+                
+            except Exception as e:
+                print(f"Error processing {col}: {e}")
+                continue
+        
+        if not log_rv_dict:
+            raise ValueError("No valid ticker data found")
+        
+        # Return DataFrame with tickers as columns
+        log_rv_df = pd.DataFrame(log_rv_dict)
+        return log_rv_df
 
 
-def prepare_har_data(log_rv_series, freq='D'):
+def prepare_har_data(log_rv_data, freq='D', ticker=None):
     """
-    Prepare HAR df for different frequencies.
+    Prepare HAR DataFrame for different frequencies and multiple tickers.
+    
+    Args:
+        log_rv_data (pd.DataFrame or pd.Series): Log RV data for multiple tickers or single series
+        freq (str): Frequency ('D', 'h', '5min')
+        ticker (str): If specified, prepare data for single ticker only
+    
+    Returns:
+        dict or pd.DataFrame: HAR data for all tickers (dict) or single ticker (DataFrame)
     """
-
     if freq == 'D':
         periods_in_day = 1
     elif freq == 'h':
-        periods_in_day = 1 * 24
+        periods_in_day = 1 * 8
     elif freq == '5min':
-        periods_in_day = 24 * 12
+        periods_in_day = 8 * 12
     else:
         raise ValueError("Freq not supported. Use 'D', 'h', or '5min'.")
     
     weekly_window = periods_in_day * 5
     monthly_window = periods_in_day * 22
     
-    df = pd.DataFrame({'log_rv': log_rv_series})
+    def prepare_single_ticker_har(log_rv_series, ticker_name):
+        """Helper function to prepare HAR data for a single ticker"""
+        df = pd.DataFrame({'log_rv': log_rv_series})
+        
+        df['daily_lag'] = df['log_rv'].shift(1)
+        df['weekly_lag'] = df['log_rv'].rolling(window=weekly_window).mean().shift(1)
+        df['monthly_lag'] = df['log_rv'].rolling(window=monthly_window).mean().shift(1)
+        
+        df.dropna(inplace=True)
+        
+        print(f"HAR data prepared for {ticker_name}: {len(df)} observations")
+        return df
     
-    df['daily_lag'] = df['log_rv'].shift(1)
-    df['weekly_lag'] = df['log_rv'].rolling(window=weekly_window).mean().shift(1)
-    df['monthly_lag'] = df['log_rv'].rolling(window=monthly_window).mean().shift(1)
+    # Handle single ticker case
+    if ticker is not None:
+        if isinstance(log_rv_data, pd.DataFrame):
+            if ticker not in log_rv_data.columns:
+                raise ValueError(f"Ticker {ticker} not found in log_rv_data columns")
+            return prepare_single_ticker_har(log_rv_data[ticker], ticker)
+        else:
+            # Assume it's a Series for the specified ticker
+            return prepare_single_ticker_har(log_rv_data, ticker)
     
-    df.dropna(inplace=True)
-
-    return df
+    # Handle multiple tickers case
+    if isinstance(log_rv_data, pd.Series):
+        # Single series, treat as one ticker
+        return prepare_single_ticker_har(log_rv_data, 'default')
+    
+    # Multiple tickers case
+    har_data_dict = {}
+    
+    for ticker_name in log_rv_data.columns:
+        try:
+            har_data = prepare_single_ticker_har(log_rv_data[ticker_name], ticker_name)
+            har_data_dict[ticker_name] = har_data
+        except Exception as e:
+            print(f"Error preparing HAR data for {ticker_name}: {e}")
+            continue
+    
+    if not har_data_dict:
+        raise ValueError("No valid HAR data could be prepared")
+    
+    return har_data_dict

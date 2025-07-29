@@ -38,20 +38,22 @@ def forecast_har_rolling(har_data_complete, horizon, window_size=252, last_log_r
             
         try:
             # Estimate HAR on the rolling window
-            X = window_data[['daily_lag', 'weekly_lag', 'monthly_lag']]
-            X = sm.add_constant(X)
-            y = window_data['log_rv']
+            X = window_data[['daily_lag', 'weekly_lag', 'monthly_lag']].copy()
+            y = window_data['log_rv'].copy()
             
-            model = sm.OLS(y, X)
+            # Check if we have a constant column already
+            X_with_const = sm.add_constant(X, has_constant='add')
+            
+            model = sm.OLS(y, X_with_const)
             model_fit = model.fit()
             
             # Get the current lags for prediction (from the last observation in window)
-            current_lags = window_data[['daily_lag', 'weekly_lag', 'monthly_lag']].iloc[-1]
-            X_forecast = pd.DataFrame([current_lags])
-            X_forecast = sm.add_constant(X_forecast, has_constant='add')
+            current_lags = window_data[['daily_lag', 'weekly_lag', 'monthly_lag']].iloc[-1].copy()
+            X_forecast = pd.DataFrame([current_lags], columns=['daily_lag', 'weekly_lag', 'monthly_lag'])
+            X_forecast_with_const = sm.add_constant(X_forecast, has_constant='add')
             
             # Make 1-step-ahead forecast
-            next_pred = model_fit.predict(X_forecast).iloc[0]
+            next_pred = model_fit.predict(X_forecast_with_const).iloc[0]
             
         except Exception as e:
             print(f"Error estimating HAR model at step {i}: {e}")

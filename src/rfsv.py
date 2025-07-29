@@ -1,230 +1,174 @@
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-
 from scipy.linalg import cholesky
-from scipy.optimize import minimize
-from statsmodels.tsa.stattools import acf
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from typing import List
 
-
-def estimate_h_loglog(series, scales, q=1):
+def estimate_h_loglog_weighted(series: pd.Series, scales: List[int], q: int = 2):
     """
-    Estimate Hurst exponent using log-log regression on moments.
+    Estimates the Hurst exponent (H) and volatility scale (nu) using a weighted
+    log-log regression of absolute increments.
 
     Args:
-        series (pd.Series): Series.
-        scales (list of int): Lag to analyze.
-        q (int): Order of the moment to use (usually either 1 or 2).
+        series (pd.Series): Time series data.
+        scales (List[int]): List of time scales (tau) to use for increments.
+        q (int): Order of the absolute moment (default is 2).
 
     Returns:
-        tuple: (H_est, R_squared)
+        Tuple[float, float, int]: Estimated H, nu, and the number of points used
+                                  for regression (0 if not enough points).
     """
-    moments = []
+    log_tau, log_moments, weights = [], [], []
     for tau in scales:
         increments = series.diff(tau).dropna()
-        moment = np.mean(np.abs(increments)**q)
-        moments.append(moment)
+        n_obs = len(increments)
+        if n_obs > 0:
+            moment = np.mean(np.abs(increments) ** q)
+            if moment > 0:
+                log_tau.append(np.log(tau))
+                log_moments.append(np.log(moment))
+                weights.append(n_obs)
     
-    log_tau = np.log(scales)
-    log_moments = np.log(moments)
+    if len(log_tau) < 2:
+        return np.nan, np.nan, 0
     
-    X = sm.add_constant(log_tau)
-    y = log_moments
+    log_tau = np.array(log_tau)
+    log_moments = np.array(log_moments)
+    weights = np.array(weights)
     
-    model = sm.OLS(y, X)
-    results = model.fit()
-    
-    slope = results.params[1]
-    
-    h_estimated = slope / q
-    
-    return h_estimated, results.rsquared
-
-
-# Now for the forecast we need to build the fBM var-cov matrix
-
-def build_fbm_covariance_matrix(times, h):
-    n = len(times)
-    cov_matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            t_i = times[i]
-            t_j = times[j]
-            cov_matrix[i, j] = 0.5 * (
-                np.power(t_i, 2 * h) + 
-                np.power(t_j, 2 * h) - 
-                np.power(np.abs(t_i - t_j), 2 * h)
-            )
-    return cov_matrix
-
-
-def forecast_RFSV(past_log_rv_series, h, nu, horizon, freq, truncation_window=252, n_sims=1, use_last_value=True, index=None):
-    """
-    RFSV forecast starting from the last observed value.
-    
-    Args:
-        past_log_rv_series (pd.Series): Series.
-        h (int): Estimated Hurst parameter.
-        nu (int): Estimated vol-of-vol parameter.
-        horizon (int): Forecast horizon.
-        freq (str): Frequency of the forecast.
-        truncation_window (int): Number of past observations to consider.
-        n_sims (int): Number of simulations to run.
-        use_last_value (bool): Whether to use the last observed value to shift the forecast.
-        index (pd.DatetimeIndex): Index for the forecast series.
-
-    Returns:
-        forecast_series (pd.Series): Forecasted series.
-
-    """
-    # Debug: Check input data quality
-    print(f"RFSV Debug - Input range: {past_log_rv_series.min():.3f} to {past_log_rv_series.max():.3f}")
-    print(f"RFSV Debug - H: {h:.3f}, nu: {nu:.3f}, horizon: {horizon}")
-    
-    if len(past_log_rv_series) > truncation_window:
-        past_log_rv_series_truncated = past_log_rv_series.iloc[-truncation_window:]
-    else:
-        past_log_rv_series_truncated = past_log_rv_series
-
-    n_past = len(past_log_rv_series_truncated)
-    
-    # Use more robust time scaling for high-frequency data
-    if freq in ['5T', '5min']:
-        time_scale = 1.0 / (288 * 252)  # Scale to annual units
-    elif freq in ['h', 'H']:
-        time_scale = 1.0 / (24 * 252)   # Scale to annual units  
-    else:
-        time_scale = 1.0 / 252           # Daily scale
-    
-    past_times = np.arange(1, n_past + 1) * time_scale
-    future_times = np.arange(n_past + 1, n_past + horizon + 1) * time_scale
-    all_times = np.concatenate([past_times, future_times])
-
+    # Handle cases where all weights are zero or very small
+    if np.sum(weights) == 0:
+        return np.nan, np.nan, 0
+            
     try:
-        cov_global = build_fbm_covariance_matrix(all_times, h)
-        
-        # Add regularization for numerical stability
-        regularization = 1e-6 * np.eye(len(all_times))
-        cov_global += regularization
-        
-        sigma_pp = cov_global[:n_past, :n_past]
-        sigma_ff = cov_global[n_past:, n_past:]
-        sigma_fp = cov_global[n_past:, :n_past]
-        sigma_pf = sigma_fp.T
-
-        past_W = past_log_rv_series_truncated.values / nu
-        
-        # Use more stable solver
-        try:
-            solved_part = np.linalg.solve(sigma_pp, past_W)
-        except np.linalg.LinAlgError:
-            # Fallback to pseudo-inverse
-            solved_part = np.linalg.pinv(sigma_pp) @ past_W
-        
-        mean_cond_W = sigma_fp @ solved_part
-        cov_cond_W = sigma_ff - sigma_fp @ np.linalg.pinv(sigma_pp) @ sigma_pf
-
-        if n_sims > 1:
-            # Enhanced conditional covariance for better variability preservation
-            if freq in ['5T', '5min']:
-                variability_boost = 2.0  # Increase variability for 5-min data
-            elif freq in ['h', 'H']:
-                variability_boost = 1.5  # Moderate increase for hourly
-            else:
-                variability_boost = 1.0  # No change for daily
-            
-            # Boost the conditional covariance
-            cov_cond_W *= variability_boost
-            cov_cond_W += np.eye(horizon) * 1e-6
-            
-            try:
-                L = cholesky(cov_cond_W, lower=True)
-                z = np.random.normal(size=(horizon, n_sims))
-                simulated_paths_W = mean_cond_W[:, np.newaxis] + L @ z
-                simulated_paths_log_sigma = nu * simulated_paths_W.T
-                mean_forecast = np.mean(simulated_paths_log_sigma, axis=0)
-            except np.linalg.LinAlgError:
-                print("Warning: Cholesky decomposition failed, using enhanced mean forecast")
-                # Add some noise to preserve variability even when using mean forecast
-                noise_scale = np.std(past_log_rv_series_truncated) * 0.3
-                noise = np.random.normal(0, noise_scale, horizon)
-                mean_forecast = nu * mean_cond_W + noise
-        else:
-            # Even for single simulation, add some variability for high-frequency data
-            base_forecast = nu * mean_cond_W
-            if freq in ['5T', '5min', 'h', 'H']:
-                noise_scale = np.std(past_log_rv_series_truncated) * 0.2
-                noise = np.random.normal(0, noise_scale, horizon)
-                mean_forecast = base_forecast + noise
-            else:
-                mean_forecast = base_forecast
+        slope, intercept = np.polyfit(log_tau, log_moments, deg=1, w=weights)
+        h = np.clip(slope / q, 0.01, 0.99) # Clip H to a reasonable range
+        nu = np.sqrt(np.exp(intercept))
+    except np.linalg.LinAlgError:
+        # Handle cases where polyfit might fail (e.g., singular matrix)
+        return np.nan, np.nan, 0
     
-    except Exception as e:
-        print(f"Error in RFSV forecast: {e}")
-        # Fallback: use simple persistence with some noise
-        last_value = past_log_rv_series_truncated.iloc[-1]
-        noise_std = past_log_rv_series_truncated.diff().std()
-        mean_forecast = np.full(horizon, last_value) + np.random.normal(0, noise_std, horizon)
-    
-    # Apply continuity adjustment with gradual decay for high-frequency data
-    if use_last_value and len(past_log_rv_series) > 0:
-        last_observed = past_log_rv_series.iloc[-1]
-        if len(mean_forecast) > 0:
-            shift = last_observed - mean_forecast[0]
-            
-            # For high-frequency data, apply gradual decay of the adjustment
-            if freq in ['5T', '5min'] and horizon > 10:
-                decay = np.exp(-np.arange(horizon) / (horizon / 5))  # Faster decay for 5-min
-            elif freq in ['h', 'H'] and horizon > 5:
-                decay = np.exp(-np.arange(horizon) / (horizon / 3))  # Moderate decay for hourly
-            else:
-                decay = np.ones(horizon)  # No decay for daily or short horizons
-            
-            mean_forecast = mean_forecast + shift * decay
-    
-    print(f"RFSV Debug - Output range: {mean_forecast.min():.3f} to {mean_forecast.max():.3f}")
+    return h, nu, len(log_tau)
 
-    forecast_series = pd.Series(mean_forecast, name='rfsv_forecast')
-    if index is not None:
-        forecast_series.index = index
-        
-    return forecast_series  
-
-# THIS METHOD IS NOT WORKING FOR NOW, KEEPING IT JUST FOR FUTURE ANALYSIS
-# ESTIMATES ARE ALWAYS (0.82-0.9) FOR H, ONLY WHEN UPPER BOUND IS HIGH ENOUGH 
-
-def theoretical_acf(h, n_lags):
-    """Computes theoretical ACF for an fBM-based process."""
-    lags = np.arange(1, n_lags + 1)
-    # Autocovariance for an incremental fBM
-    autocov = 0.5 * (np.abs(lags - 1)**(2*h) - 2 * np.abs(lags)**(2*h) + np.abs(lags + 1)**(2*h))
-    return autocov
-
-def est_parameters(log_rv_series, max_lags=100):
+# Function to build the FBM covariance matrix
+def build_fbm_covariance_matrix(times: np.ndarray, h: float) -> np.ndarray:
     """
-    Estimate Hurst exponent and extract vol-of-vol coefficient nu.
+    Builds the covariance matrix for fractional Brownian motion (fBm).
 
     Args:
-        log_rv_series (pandas.Series): Log realized variance series.
-        max_lags (int): Number of lags to use for ACF matching.
+        times (np.ndarray): Array of time points.
+        h (float): Hurst exponent.
 
     Returns:
-        tuple: (h_estimated, nu_estimated)
+        np.ndarray: The fBm covariance matrix.
+    """
+    n = len(times)
+    t = times.reshape(-1, 1)
+    abs_diff = np.abs(t - t.T)
+    cov = 0.5 * (np.power(t, 2 * h) + np.power(t.T, 2 * h) - np.power(abs_diff, 2 * h))
+    return cov
+
+# Function for single-step forecasting
+def forecast_single_step(
+    past_log_rv: np.ndarray, 
+    h: float, 
+    nu: float, 
+    horizon: int, 
+    n_sims: int
+) -> np.ndarray:
+    """
+    Performs a single step forecast using the RFSV model.
+
+    Args:
+        past_log_rv (np.ndarray): Array of past log realized volatility values.
+        h (float): Hurst exponent.
+        nu (float): Volatility scale.
+        horizon (int): Number of steps ahead to forecast.
+        n_sims (int): Number of Monte Carlo simulations (1 for conditional expectation).
+
+    Returns:
+        np.ndarray: Array of forecasted log realized volatility values.
+    """
+    n = len(past_log_rv)
+    times = np.arange(1, n + horizon + 1) # Time points for observed and forecasted data
+    cov = build_fbm_covariance_matrix(times, h)
+
+    sigma_pp = cov[:n, :n] # Covariance of past data
+    sigma_ff = cov[n:, n:] # Covariance of future data
+    sigma_fp = cov[n:, :n] # Covariance between future and past data
+
+    # Add a small regularization term to the diagonal of sigma_pp to prevent singularity
+    sigma_pp_reg = sigma_pp + np.eye(n) * 1e-6 
+    
+    try:
+        # Solve for the conditional mean
+        solved = np.linalg.solve(sigma_pp_reg, past_log_rv / nu)
+        mean = sigma_fp @ solved
+    except np.linalg.LinAlgError as e:
+        return np.full(horizon, np.nan)
+    except ValueError as e: # Catch potential ValueError from solve if inputs are bad
+        return np.full(horizon, np.nan)
+
+    if n_sims == 1:
+        # Return conditional expectation
+        return (nu * mean).flatten()
+    else:
+        # Calculate conditional covariance for Monte Carlo simulations
+        try:
+            cov_cond = sigma_ff - sigma_fp @ np.linalg.solve(sigma_pp_reg, sigma_fp.T)
+            # Ensure cov_cond is symmetric and positive semi-definite for Cholesky
+            cov_cond = (cov_cond + cov_cond.T) / 2
+            # Add a small epsilon to the diagonal for numerical stability before Cholesky
+            cov_cond_reg = cov_cond + np.eye(horizon) * 1e-10
+            
+            L = cholesky(cov_cond_reg, lower=True)
+            z = np.random.normal(size=(horizon, n_sims))
+            sim_paths = mean[:, None] + L @ z
+            return np.mean(nu * sim_paths.T, axis=0)
+        except np.linalg.LinAlgError as e:
+            return np.full(horizon, np.nan)
+
+
+def rolling_forecast_rfsv(
+    log_rv_series: pd.Series,
+    scales: List[int],
+    horizon: int,
+    rolling_window: int = 252,
+    n_sims: int = 1,
+    freq: str = "D"
+) -> pd.Series:
+    """
+    Computes RFSV forecasts of log-realized volatility for a given horizon.
+    This function is designed to produce a single block of 'horizon' forecasts
+    using the last 'rolling_window' observations from the input series.
+
+    Args:
+        log_rv_series (pd.Series): Time series of log realized variance (training data).
+        scales (List[int]): Scales for H and nu estimation.
+        horizon (int): Number of steps ahead to forecast.
+        rolling_window (int): Length of past window to use for estimation.
+        n_sims (int): Number of Monte Carlo paths (1 = conditional expectation).
+        freq (str): Frequency of the time series (e.g., "D", "h", "5min").
+
+    Returns:
+        pd.Series: Forecasted log realized volatility values for the specified horizon.
+                   The index will be a default integer index.
     """
     
-    empirical_acf_vals = acf(log_rv_series, nlags=max_lags, fft=True)[1:]
+    # Ensure rolling_window does not exceed the length of the series
+    if rolling_window > len(log_rv_series):
+        print(f"Warning: rolling_window ({rolling_window}) is greater than series length ({len(log_rv_series)}). Using full series length.")
+        rolling_window = len(log_rv_series)
+
+    # Use the last 'rolling_window' observations for estimation
+    window = log_rv_series.iloc[-rolling_window:]
     
-    def objective_function(h):
-
-        theoretical_acf_vals = theoretical_acf(h[0], max_lags)
-        # "Loss function"
-        return np.sum((empirical_acf_vals - theoretical_acf_vals)**2)
-
-    # Minimize to find H
-    result = minimize(objective_function, x0=[0.1], bounds=[(0.01, 0.49)])
-    h_estimated = result.x[0]
-
-    nu_estimated = np.std(log_rv_series)
+    h, nu, _ = estimate_h_loglog_weighted(window, scales)
     
-    return h_estimated, nu_estimated
+    if np.isnan(h) or np.isnan(nu):
+        forecast = np.full(horizon, np.nan)
+    else:
+        forecast = forecast_single_step(window.values, h, nu, horizon, n_sims)
+    
+    # Return the forecasts as a pandas Series with a default integer index
+    return pd.Series(forecast, name="RFSV_Forecast")

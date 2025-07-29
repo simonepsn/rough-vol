@@ -1,14 +1,17 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import warnings
+import pickle
+import sys
+import os
+
+os.chdir(os.path.abspath("/home/simonepsn/Desktop/rough-vol/")) 
 
 from src.data_preparation import load_and_clean, calculate_log_rv, prepare_har_data
 from src.garch import forecast_garch_rolling
 from src.har import forecast_har_rolling
-from src.rfsv import estimate_h_loglog, forecast_RFSV
-from src.analysis_visualization import (
-    evaluate_forecasts
-)
+from src.rfsv import rolling_forecast_rfsv
+
 
 
 
@@ -20,7 +23,7 @@ warnings.filterwarnings("ignore")
 
 raw_dir = 'other/data/raw_data'
 output_path = 'other/data/df.csv'
-holdout_days = 25
+holdout_period = 25
 
 
 
@@ -28,165 +31,387 @@ holdout_days = 25
 #                   --- DATA LOADING AND PREPARATION ---
 # ==============================================================================
 
-df = load_and_clean(raw_data_directory=raw_dir, file_pattern='SPX*.csv', output_path=output_path)
+print("Loading multi-ticker data...")
+df_5m = pd.read_csv('other/data/raw_data/5min_data.csv', sep=';', index_col=0, parse_dates=True)
+df_h = pd.read_csv('other/data/raw_data/1h_data.csv', sep=';', index_col=0, parse_dates=True)
+df_d = pd.read_csv('other/data/raw_data/1d_data.csv', sep=';', index_col=0, parse_dates=True)
 
-df = df['2011-01-01':'2018-12-31']
+print(f"Data shapes - Daily: {df_d.shape}, Hourly: {df_h.shape}, 5min: {df_5m.shape}")
+print(f"Available tickers: {[col.replace('_close', '') for col in df_d.columns if '_close' in col]}")
 
-# GARCH inputs
-price_d = df['price'].resample('D').last()
-lret_d = np.log(price_d).diff().dropna()
-price_h = df['price'].resample('h').last()
-lret_h = np.log(price_h).diff().dropna()
-price_5m = df['price'].resample('5min').last()
-lret_5m = np.log(price_5m).diff().dropna()
+# Calculate log returns for each ticker (for GARCH)
+print("\nCalculating log returns for all tickers...")
+lret_daily_data = {}
+lret_hourly_data = {}
+lret_5min_data = {}
 
-# RFSV/HAR inputs
-lrv_d = calculate_log_rv(df, price_col='price', resample_freq='1D').squeeze()
-lrv_h = calculate_log_rv(df, price_col='price', resample_freq='1h').squeeze()
-lrv_5m = calculate_log_rv(df, price_col='price', resample_freq='5min').squeeze()
+for col in df_d.columns:
+    if '_close' in col:
+        ticker = col.replace('_close', '')
+        
+        # Calculate log returns for each frequency
+        lret_daily_data[ticker] = np.log(df_d[col] / df_d[col].shift(1)).dropna()
+        lret_hourly_data[ticker] = np.log(df_h[col] / df_h[col].shift(1)).dropna()
+        lret_5min_data[ticker] = np.log(df_5m[col] / df_5m[col].shift(1)).dropna()
 
-# HAR inputs
+# Convert to DataFrames
+lret_d = pd.DataFrame(lret_daily_data)
+lret_h = pd.DataFrame(lret_hourly_data)
+lret_5m = pd.DataFrame(lret_5min_data)
+
+print(f"Log returns calculated for {len(lret_d.columns)} tickers")
+
+# Calculate log realized volatility for each ticker (for RFSV/HAR)
+print("\nCalculating log realized volatility for all tickers...")
+lrv_d = calculate_log_rv(df_d, resample_freq='1D')
+lrv_h = calculate_log_rv(df_h, resample_freq='1h') 
+lrv_5m = calculate_log_rv(df_5m, resample_freq='5min')
+
+print(f"Log RV shapes - Daily: {lrv_d.shape}, Hourly: {lrv_h.shape}, 5min: {lrv_5m.shape}")
+
+# Prepare HAR data for each ticker
+print("\nPreparing HAR data for all tickers...")
 har_d_data = prepare_har_data(lrv_d, freq='D')
 har_h_data = prepare_har_data(lrv_h, freq='h')
 har_5m_data = prepare_har_data(lrv_5m, freq='5min')
 
+print(f"HAR data prepared for {len(har_d_data)} tickers (daily)")
 
+# Determine available analyses based on data length
+analysis_frequencies = []
+window_sizes = {}
 
-# SPLIT DATA INTO TRAINING AND TEST SETS
+# Daily data
 
-# Daily
-train_lret_d = lret_d[:-holdout_days]
-train_lrv_d = lrv_d[:-holdout_days]
-actuals_d = lrv_d[-holdout_days:]
+train_lret_d = lret_d.iloc[:-holdout_period]
+train_lrv_d = lrv_d.iloc[:-holdout_period]
+actuals_d = lrv_d.iloc[-holdout_period:]
+window_size_d = min(len(train_lrv_d) // 2, 252)
+analysis_frequencies.append('daily')
+window_sizes['daily'] = window_size_d
+print(f"Daily analysis enabled: {len(train_lrv_d)} training obs, {len(actuals_d)} test obs")
 
-# 1-Hour
-holdout_h = holdout_days * 24
-train_lret_h = lret_h[:-holdout_h]
-train_lrv_h = lrv_h[:-holdout_h]
-actuals_h = lrv_h[-holdout_h:]
+# Hourly data
+train_lret_h = lret_h.iloc[:-holdout_period]
+train_lrv_h = lrv_h.iloc[:-holdout_period]
+actuals_h = lrv_h.iloc[-holdout_period:]
+window_size_h = min(len(train_lrv_h) // 2, 252)
+analysis_frequencies.append('hourly')
+window_sizes['hourly'] = window_size_h
+print(f"Hourly analysis enabled: {len(train_lrv_h)} training obs, {len(actuals_h)} test obs")
 
-# 5-minutes
-holdout_5m = holdout_days * 288
-train_lret_5m = lret_5m[:-holdout_5m]
-train_lrv_5m = lrv_5m[:-holdout_5m]
-actuals_5m = lrv_5m[-holdout_5m:]
+# 5-minute data
+train_lret_5m = lret_5m.iloc[:-holdout_period]
+train_lrv_5m = lrv_5m.iloc[:-holdout_period]
+actuals_5m = lrv_5m.iloc[-holdout_period:]
+window_size_5m = min(len(train_lrv_5m) // 2, 252)
+analysis_frequencies.append('5min')
+window_sizes['5min'] = window_size_5m
+print(f"5-minute analysis enabled: {len(train_lrv_5m)} training obs, {len(actuals_5m)} test obs")
 
+print(f"Enabled analyses: {analysis_frequencies}")
 
+# Data validation
+print("\n--- Data Validation ---")
+for freq in analysis_frequencies:
+    if freq == 'daily':
+        print(f"Daily - Train period: {train_lrv_d.index.min()} to {train_lrv_d.index.max()}")
+        print(f"Daily - Test period: {actuals_d.index.min()} to {actuals_d.index.max()}")
+    elif freq == 'hourly':
+        print(f"Hourly - Train period: {train_lrv_h.index.min()} to {train_lrv_h.index.max()}")
+        print(f"Hourly - Test period: {actuals_h.index.min()} to {actuals_h.index.max()}")
+    elif freq == '5min':
+        print(f"5min - Train period: {train_lrv_5m.index.min()} to {train_lrv_5m.index.max()}")
+        print(f"5min - Test period: {actuals_5m.index.min()} to {actuals_5m.index.max()}")
 
 # ==============================================================================
 #                              --- DAILY ANALYSIS ---
 # ==============================================================================
 
-# GARCH
-forecast_garch_d = forecast_garch_rolling(lret_d, horizon=holdout_days, window_size=252, last_log_rv=train_lrv_d.iloc[-1])
+if 'daily' in analysis_frequencies:
+    print("\n" + "="*50)
+    print("DAILY ANALYSIS")
+    print("="*50)
+    
+    # Initialize forecast dictionaries for each model
+    forecast_garch_d = {}
+    forecast_har_d = {}
+    forecast_rfsv_d = {}
+    
+    # Get all tickers
+    tickers = list(lrv_d.columns)
+    print(f"Processing {len(tickers)} tickers: {tickers}")
+    
+    for ticker in tickers:
+        print(f"Processing ticker: {ticker}")
+        
+        # Get ticker-specific data
+        ticker_lret_d = lret_d[ticker]
+        ticker_lrv_d = train_lrv_d[ticker]
+        ticker_har_d = har_d_data[ticker]
+        ticker_actuals_d = actuals_d[ticker]
+        
+        # GARCH
+        try:
+            forecast_garch_d[ticker] = forecast_garch_rolling(
+                ticker_lret_d, 
+                horizon=holdout_period, 
+                window_size=window_sizes['daily'], 
+                last_log_rv=ticker_lrv_d.iloc[-1]
+            )
+        except Exception as e:
+            print(f"GARCH error for {ticker}: {e}")
+            forecast_garch_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
+        
+        # HAR
+        try:
+            forecast_har_d[ticker] = forecast_har_rolling(
+                ticker_har_d, 
+                horizon=holdout_period, 
+                window_size=window_sizes['daily'], 
+                last_log_rv=ticker_lrv_d.iloc[-1]
+            )
+        except Exception as e:
+            print(f"HAR error for {ticker}: {e}")
+            forecast_har_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
+        
+        # RFSV
+        try:
+            scales_d = [1, 2, 4, 8, 16, 22]
+            forecast_rfsv_d[ticker] = rolling_forecast_rfsv(
+                ticker_lrv_d, 
+                scales=scales_d, 
+                horizon=holdout_period, 
+                rolling_window=window_sizes['daily'], 
+                n_sims=5, 
+                freq='D'
+            )
+        except Exception as e:
+            print(f"RFSV error for {ticker}: {e}")
+            forecast_rfsv_d[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_d.index)
+    
+    # Create summary DataFrames (using first ticker as representative)
+    forecast_df_d = pd.DataFrame()
 
-# HAR
-forecast_har_d = forecast_har_rolling(har_d_data, horizon=holdout_days, window_size=252, last_log_rv=train_lrv_d.iloc[-1])
+    for ticker in tickers:
+        for model_name, model_dict in zip(['GARCH', 'HAR', 'RFSV'], [forecast_garch_d, forecast_har_d, forecast_rfsv_d]):
+            col_name = f"{ticker}_{model_name}"
+            forecast_df_d[col_name] = model_dict[ticker].reset_index(drop=True)
 
-# RFSV
-scales = [1, 2, 5, 10, 20, 50, 100, 200]
-h_est_d, _ = estimate_h_loglog(train_lrv_d, scales, q=1)
-nu_est_d = train_lrv_d.diff().dropna().std()
-forecast_rfsv_d = forecast_RFSV(train_lrv_d, h_est_d, nu_est_d, horizon=holdout_days, freq='D', truncation_window=252, n_sims=5, use_last_value=True, index=actuals_d.index)
-
-# Ensure forecasts have the same index as actuals
-forecast_garch_d.index = actuals_d.index
-forecast_har_d.index = actuals_d.index
-forecast_rfsv_d.index = actuals_d.index
-
-# Store forecasts in a DataFrame
-forecasts_d_dict = {'GARCH': forecast_garch_d, 'HAR': forecast_har_d, 'RFSV': forecast_rfsv_d}
-forecast_df_d = pd.DataFrame(forecasts_d_dict)
+    print(f"Daily forecasting completed: {len(forecast_df_d)} predictions for {len(tickers)} tickers")
+else:
+    print("Skipping daily analysis due to insufficient data")
+    forecasts_d_dict = {}
+    forecast_df_d = pd.DataFrame()
 
 # ==============================================================================
 #                           --- 1-HOUR ANALYSIS ---
 # ==============================================================================
 
-# GARCH
-forecast_garch_h = forecast_garch_rolling(lret_h, horizon=holdout_days * 24, window_size=252, last_log_rv=train_lrv_h.iloc[-1])
+if 'hourly' in analysis_frequencies:
+    print("\n" + "="*50)
+    print("HOURLY ANALYSIS")
+    print("="*50)
+    
+    # Initialize forecast dictionaries for each model
+    forecast_garch_h = {}
+    forecast_har_h = {}
+    forecast_rfsv_h = {}
+    
+    # Get all tickers
+    tickers = list(lrv_h.columns)
+    print(f"Processing {len(tickers)} tickers: {tickers}")
+    
+    for ticker in tickers:
+        print(f"Processing ticker: {ticker}")
+        
+        # Get ticker-specific data
+        ticker_lret_h = lret_h[ticker]
+        ticker_lrv_h = train_lrv_h[ticker]
+        ticker_har_h = har_h_data[ticker]
+        ticker_actuals_h = actuals_h[ticker]
+        
+        # GARCH
+        try:
+            forecast_garch_h[ticker] = forecast_garch_rolling(
+                ticker_lret_h, 
+                horizon=holdout_period, 
+                window_size=window_sizes['hourly'], 
+                last_log_rv=ticker_lrv_h.iloc[-1]
+            )
+        except Exception as e:
+            print(f"GARCH error for {ticker}: {e}")
+            forecast_garch_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
+        
+        # HAR
+        try:
+            forecast_har_h[ticker] = forecast_har_rolling(
+                ticker_har_h, 
+                horizon=holdout_period, 
+                window_size=window_sizes['hourly'], 
+                last_log_rv=ticker_lrv_h.iloc[-1]
+            )
+        except Exception as e:
+            print(f"HAR error for {ticker}: {e}")
+            forecast_har_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
+        
+        # RFSV
+        try:
+            scales_h = [1, 2, 4, 8, 16, 32, 48]
+            forecast_rfsv_h[ticker] = rolling_forecast_rfsv(
+                ticker_lrv_h, 
+                scales=scales_h, 
+                horizon=holdout_period, 
+                rolling_window=window_sizes['hourly'], 
+                n_sims=5, 
+                freq='h'
+            )
+        except Exception as e:
+            print(f"RFSV error for {ticker}: {e}")
+            forecast_rfsv_h[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_h.index)
+       
+    forecast_df_h = pd.DataFrame()
 
-# HAR
-forecast_har_h = forecast_har_rolling(har_h_data, horizon=holdout_days * 24, window_size=252, last_log_rv=train_lrv_h.iloc[-1])
+    for ticker in tickers:
+        for model_name, model_dict in zip(['GARCH', 'HAR', 'RFSV'], [forecast_garch_h, forecast_har_h, forecast_rfsv_h]):
+            col_name = f"{ticker}_{model_name}"
+            forecast_df_h[col_name] = model_dict[ticker].reset_index(drop=True)
 
-
-# RFSV
-scales = [1, 2, 5, 10, 20, 50, 100, 200]
-h_est_h, _ = estimate_h_loglog(train_lrv_h, scales, q=1)
-nu_est_h = train_lrv_h.diff().dropna().std()
-forecast_rfsv_h = forecast_RFSV(train_lrv_h, h_est_h, nu_est_h, horizon=holdout_h, freq='h', truncation_window=252, n_sims=5, use_last_value=True, index=actuals_h.index)
-
-# Keep the index consistent with actuals
-forecast_garch_h.index = actuals_h.index
-forecast_har_h.index = actuals_h.index
-forecast_rfsv_h.index = actuals_h.index
-
-# Collect 1-hour forecasts
-forecasts_h_dict = {'GARCH': forecast_garch_h, 'HAR': forecast_har_h, 'RFSV': forecast_rfsv_h}
-forecast_df_h = pd.DataFrame(forecasts_h_dict)
-
-
-
+    print(f"Hourly forecasting completed: {len(forecast_df_h)} predictions for {len(tickers)} tickers")
+else:
+    print("Skipping hourly analysis due to insufficient data")
+    forecasts_h_dict = {}
+    forecast_df_h = pd.DataFrame()
 # ==============================================================================
 #                          --- 5-MINUTES ANALYSIS ---
 # ==============================================================================
 
-# GARCH
-# forecast_garch_5m = forecast_garch_rolling(lret_5m, horizon=holdout_days * 24 * 12, window_size=252, last_log_rv=train_lrv_5m.iloc[-1])
-# Note: GARCH is not expected to perform well at this high frequency due to non-trading periods and intraday seasonality, but is included for completeness.
+if '5min' in analysis_frequencies:
+    print("\n" + "="*50)
+    print("5-MINUTE ANALYSIS")
+    print("="*50)
+    
+    # Initialize forecast dictionaries for each model
+    forecast_garch_5m = {}
+    forecast_har_5m = {}
+    forecast_rfsv_5m = {}
+    
+    # Get all tickers
+    tickers = list(lrv_5m.columns)
+    print(f"Processing {len(tickers)} tickers: {tickers}")
+    
+    for ticker in tickers:
+        print(f"Processing ticker: {ticker}")
+        
+        # Get ticker-specific data
+        ticker_lret_5m = lret_5m[ticker] if ticker in lret_5m.columns else None
+        ticker_lrv_5m = train_lrv_5m[ticker]
+        ticker_har_5m = har_5m_data[ticker]
+        ticker_actuals_5m = actuals_5m[ticker]
+        
+        # GARCH (commented out for computational efficiency)
+        # try:
+        #     forecast_garch_5m[ticker] = forecast_garch_rolling(
+        #         ticker_lret_5m, 
+        #         horizon=holdout_period, 
+        #         window_size=window_sizes['5min'], 
+        #         last_log_rv=ticker_lrv_5m.iloc[-1]
+        #     )
+        # except Exception as e:
+        #     print(f"GARCH error for {ticker}: {e}")
+        #     forecast_garch_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
+        
+        # HAR
+        try:
+            forecast_har_5m[ticker] = forecast_har_rolling(
+                ticker_har_5m, 
+                horizon=holdout_period, 
+                window_size=window_sizes['5min'], 
+                last_log_rv=ticker_lrv_5m.iloc[-1]
+            )
+        except Exception as e:
+            print(f"HAR error for {ticker}: {e}")
+            forecast_har_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
+        
+        # RFSV
+        try:
+            scales_5m = [1, 2, 4, 8, 16, 32, 64, 128]
+            forecast_rfsv_5m[ticker] = rolling_forecast_rfsv(
+                ticker_lrv_5m, 
+                scales=scales_5m, 
+                horizon=holdout_period, 
+                rolling_window=window_sizes['5min'], 
+                n_sims=5, 
+                freq='5min'
+            )
+        except Exception as e:
+            print(f"RFSV error for {ticker}: {e}")
+            forecast_rfsv_5m[ticker] = pd.Series([np.nan] * holdout_period, index=ticker_actuals_5m.index)
+    
+    # Create summary DataFrame - only using HAR and RFSV for 5-minute (GARCH skipped)
+    forecast_df_5m = pd.DataFrame()
 
-# HAR
-forecast_har_5m = forecast_har_rolling(har_5m_data, horizon=holdout_days * 24 * 12, window_size=252, last_log_rv=train_lrv_5m.iloc[-1])
+    for ticker in tickers:
+        # HAR forecasts
+        col_name_har = f"{ticker}_HAR"
+        forecast_df_5m[col_name_har] = forecast_har_5m[ticker].reset_index(drop=True)
+        
+        # RFSV forecasts
+        col_name_rfsv = f"{ticker}_RFSV"
+        forecast_df_5m[col_name_rfsv] = forecast_rfsv_5m[ticker].reset_index(drop=True)
 
+    print(f"5-minute forecasting completed: {len(forecast_df_5m)} predictions for {len(tickers)} tickers")
+else:
+    print("Skipping 5-minute analysis due to insufficient data")
+    forecast_har_5m = {}
+    forecast_rfsv_5m = {}
+    forecast_df_5m = pd.DataFrame()
 
-# RFSV
-scales = [1, 2, 5, 10, 20, 50, 100, 200]
-h_est_5m, _ = estimate_h_loglog(train_lrv_5m, scales, q=1)
-nu_est_5m = train_lrv_5m.diff().dropna().std()
-forecast_rfsv_5m = forecast_RFSV(train_lrv_5m, h_est_5m, nu_est_5m, horizon=holdout_5m, freq='5T', truncation_window=252, n_sims=5, use_last_value=True, index=actuals_5m.index)
-
-# Keep the index consistent with actuals
-# forecast_garch_5m.index = actuals_5m.index
-forecast_har_5m.index = actuals_5m.index
-forecast_rfsv_5m.index = actuals_5m.index
-
-
-# Collect 5-minutes forecasts
-forecasts_5m_dict = {'HAR': forecast_har_5m, 'RFSV': forecast_rfsv_5m}
-forecast_df_5m = pd.DataFrame(forecasts_5m_dict)
-
-# For the sake of computationally doable things (and statistical usefulness) we leave this here {'GARCH': forecast_garch_5m}
 
 # ==============================================================================
-#       --- PERFORMANCE EVALUATION & VISUALIZATION (RUNS AT THE END) ---
+#                     --- SAVE ALL TICKER FORECASTS FOR ANALYSIS ---
 # ==============================================================================
 
-# --- Daily Results ---
-results_summary_d, rmse_d, qlike_d = evaluate_forecasts(actuals_d, forecasts_d_dict)
-results_summary_d.to_csv("forecast_results/results_summary_d.csv", sep=";")
-
-# --- Hourly Results ---
-results_summary_h, rmse_h, qlike_h = evaluate_forecasts(actuals_h, forecasts_h_dict)
-results_summary_h.to_csv("forecast_results/results_summary_h.csv", sep=";")
+print("\n" + "="*50)
+print("SAVING ALL TICKER FORECASTS")
+print("="*50)
 
 
-# --- 5-Minute Results ---
-results_summary_5m, rmse_5m, qlike_5m = evaluate_forecasts(actuals_5m, forecasts_5m_dict)
-results_summary_5m.to_csv("forecast_results/results_summary_5m.csv", sep=";")
+# Create results directory
+os.makedirs("forecast_results", exist_ok=True)
 
+# Save all ticker forecasts and actuals for comprehensive analysis
+if 'daily' in analysis_frequencies:
+    with open("forecast_results/all_forecasts_daily.pkl", "wb") as f:
+        pickle.dump({
+            'forecast_garch_d': forecast_garch_d,
+            'forecast_har_d': forecast_har_d, 
+            'forecast_rfsv_d': forecast_rfsv_d,
+            'actuals_d': actuals_d,
+            'tickers': list(lrv_d.columns)
+        }, f)
+    print("All daily ticker forecasts saved")
 
-# ==============================================================================
-#                           --- SAVE FINAL RESULTS ---
-# ==============================================================================
+if 'hourly' in analysis_frequencies:
+    with open("forecast_results/all_forecasts_hourly.pkl", "wb") as f:
+        pickle.dump({
+            'forecast_garch_h': forecast_garch_h,
+            'forecast_har_h': forecast_har_h,
+            'forecast_rfsv_h': forecast_rfsv_h, 
+            'actuals_h': actuals_h,
+            'tickers': list(lrv_h.columns)
+        }, f)
+    print("All hourly ticker forecasts saved")
 
-forecast_df_d['actuals'] = actuals_d
-forecast_df_h['actuals'] = actuals_h
-forecast_df_5m['actuals'] = actuals_5m
-
-forecast_df_d.to_csv("forecast_results/forecast_d.csv", sep=";")
-forecast_df_h.to_csv("forecast_results/forecast_h.csv", sep=";")
-forecast_df_5m.to_csv("forecast_results/forecast_5m.csv", sep=";")
-
-print("Finished!")
+if '5min' in analysis_frequencies:
+    with open("forecast_results/all_forecasts_5min.pkl", "wb") as f:
+        pickle.dump({
+            'forecast_har_5m': forecast_har_5m,
+            'forecast_rfsv_5m': forecast_rfsv_5m,
+            'actuals_5m': actuals_5m, 
+            'tickers': list(lrv_5m.columns)
+        }, f)
+    print("All 5-minute ticker forecasts saved")
 
 # ==============================================================================
 #                                  --- THANKS ---

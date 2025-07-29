@@ -65,8 +65,9 @@ def forecast_garch_rolling(log_returns_series, horizon, window_size=252, last_lo
     return pd.Series(forecasts, index=forecast_dates, name='garch_forecast')
 
 # ===========================================================================
-# Previous versions, which are not recommended for rolling forecasts:
+# Previous versions, which are not recommended/(do not work) for rolling forecasts:
 # ===========================================================================
+
 def estimate_garch(log_returns_series):
     """
     Estimate a GARCH(1,1) on log returns,

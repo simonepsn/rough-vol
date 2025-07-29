@@ -2,215 +2,223 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pickle
+from pathlib import Path
+from sklearn.metrics import mean_squared_error
 
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-def filter_trading_hours(data_series, freq='5min'):
+def evaluate_forecasts(actuals, forecasts_df, freq='D'):
     """
-    Filter data to include only trading hours (9:30 AM - 4:00 PM EST) for intraday frequencies.
-    Also removes weekends.
-    """
-    if freq not in ['5min', '5T', '5m', 'h', 'H', 'Hourly']:
-        return data_series  # No filtering for daily data
-    
-    # Create a copy to avoid modifying original
-    filtered_data = data_series.copy()
-    
-    # Remove weekends
-    filtered_data = filtered_data[filtered_data.index.weekday < 5]
-    
-    # For intraday data, filter trading hours (9:30 AM - 4:00 PM EST)
-    if freq in ['5min', '5T', '5m']:
-        # Keep only 9:30 AM to 4:00 PM
-        filtered_data = filtered_data.between_time('09:30', '16:00')
-    elif freq in ['h', 'H', 'Hourly']:
-        # For hourly, keep 9:00 AM to 4:00 PM to capture full trading day
-        filtered_data = filtered_data.between_time('09:00', '16:00')
-    
-    # Remove periods with extremely low activity (likely half-days or holidays)
-    if len(filtered_data) > 100:  # Only if we have enough data
-        # Group by date and count observations per day
-        daily_counts = filtered_data.groupby(filtered_data.index.date).count()
-        
-        if freq in ['5min', '5T', '5m']:
-            min_obs_per_day = 50  # Expect ~78 observations per trading day (6.5 hours * 12)
-        elif freq in ['h', 'H', 'Hourly']:
-            min_obs_per_day = 5   # Expect ~8 observations per trading day
-        
-        # Keep only dates with sufficient observations
-        valid_dates = daily_counts[daily_counts >= min_obs_per_day].index
-        date_filter = pd.Series(filtered_data.index.date).isin(valid_dates)
-        filtered_data = filtered_data[date_filter.values]
-    
-    print(f"Trading hours filter: {len(data_series)} -> {len(filtered_data)} observations")
-    return filtered_data
-
-def qlike_loss(y_true, y_pred):
-    """Calculates the QLIKE loss function safely."""
-    # Clip extreme values to prevent overflow
-    y_true_clipped = np.clip(y_true, -20, 5)  # Reasonable range for log-RV
-    y_pred_clipped = np.clip(y_pred, -20, 5)
-    
-    rv_true = np.exp(y_true_clipped)
-    rv_pred = np.exp(y_pred_clipped)
-    
-    epsilon = 1e-8
-    ratio = rv_pred / (rv_true + epsilon)
-    
-    # Clip ratio to prevent log(0) or extreme values
-    ratio = np.clip(ratio, epsilon, 1e8)
-    
-    qlike = ratio - np.log(ratio) - 1
-    
-    # Additional safety check
-    qlike = np.clip(qlike, 0, 100)  # QLIKE should be non-negative and reasonable
-    
-    return np.mean(qlike)
-
-def evaluate_forecasts(actuals, forecasts_dict, freq='D'):
-    """
-    Calculates performance metrics (RMSE, QLIKE) for multiple models over a forecast horizon.
+    Calculates performance metrics (RMSE) for multiple models over a forecast horizon.
     Uses index alignment and trading hours filtering to automatically exclude non-trading periods.
 
     Args:
         actuals (pd.Series): The true future values.
-        forecasts_dict (dict): A dictionary of forecast Series.
+        forecasts_df (pd.DataFrame): A DataFrame where each column represents forecasts
+                                      from a different model/ticker combination.
+                                      Each column name should represent a unique model/ticker.
         freq (str): Data frequency for proper filtering.
 
     Returns:
-        tuple: (DataFrame with summary results, DataFrame with RMSE results, DataFrame with QLIKE results).
+        tuple: (DataFrame with summary RMSE results, DataFrame with RMSE results).
     """
-    # Apply trading hours filter to actuals
-    actuals_filtered = filter_trading_hours(actuals, freq)
     
-    # Get common index (intersection of all series) after filtering
-    common_index = actuals_filtered.index
-    for model, forecast in forecasts_dict.items():
-        forecast_filtered = filter_trading_hours(forecast, freq)
-        common_index = common_index.intersection(forecast_filtered.index)
-    
+    # Get common index (intersection of all series)
+    common_index = actuals.index.intersection(forecasts_df.index)
+
     # Align all series to common index
-    actuals_aligned = actuals_filtered.loc[common_index]
-    forecasts_aligned = {}
-    for model, forecast in forecasts_dict.items():
-        forecast_filtered = filter_trading_hours(forecast, freq)
-        forecasts_aligned[model] = forecast_filtered.loc[common_index]
-    
-    print(f"Using {len(common_index)} common trading periods for evaluation")
-    
+    actuals_aligned = actuals.loc[common_index]
+    forecasts_aligned_df = forecasts_df.loc[common_index] # This line expects forecasts_df to be a DataFrame
+        
     horizon = len(actuals_aligned)
-    models = list(forecasts_aligned.keys())
+    # The models are now correctly identified as the column names of the aligned forecasts DataFrame
+    models = forecasts_aligned_df.columns.tolist() 
     
     rmse_data = {model: [] for model in models}
-    qlike_data = {model: [] for model in models}
 
+    # Iterate through each step of the forecast horizon
     for h in range(horizon):
         y_true_step = actuals_aligned.iloc[h]
-        for model in models:
-            y_pred_step = forecasts_aligned[model].iloc[h]
+        
+        # For each model (column) in the forecasts DataFrame
+        for model_col_name in models:
+            # Access the specific forecast value for the current step and current model column
+            y_pred_step = forecasts_aligned_df[model_col_name].iloc[h] 
             
             rmse = np.sqrt(mean_squared_error([y_true_step], [y_pred_step]))
-            qlike = qlike_loss(np.array([y_true_step]), np.array([y_pred_step]))
             
-            rmse_data[model].append(rmse)
-            qlike_data[model].append(qlike)
+            rmse_data[model_col_name].append(rmse)
             
     index_labels = [f't+{i+1}' for i in range(horizon)]
     rmse_df = pd.DataFrame(rmse_data, index=index_labels)
-    qlike_df = pd.DataFrame(qlike_data, index=index_labels)
     
     rmse_mean = rmse_df.mean()
-    qlike_mean = qlike_df.mean()
     
     results_summary = pd.DataFrame({
-        'RMSE': rmse_mean,
-        'QLIKE': qlike_mean
+        'RMSE': rmse_mean
     })
     
-    return results_summary, rmse_df, qlike_df
+    return results_summary, rmse_df
+def plot_forecast_comparison(actuals: pd.Series, forecasts_dict: dict, freq: str, ticker_name: str = "Unknown Ticker"):
+    """
+    Plots actual values vs. forecasted paths from different models with robust filtering and error handling.
+    Includes checks for empty or all-NaN data to prevent plotting errors.
 
-def plot_forecast_comparison(actuals, forecasts_dict, freq):
-    """Plots actual values vs. forecasted paths from different models with proper filtering."""
-    # Apply trading hours filter
-    actuals_filtered = filter_trading_hours(actuals, freq)
-    forecasts_filtered = {}
+    Args:
+        actuals (pd.Series): The true future values (e.g., actual log realized volatility).
+        forecasts_dict (dict): A dictionary where keys are model names (str) and values are
+                               pd.Series representing forecasts from that model.
+        freq (str): Data frequency (e.g., 'D', 'h', '5min') for proper plotting and scaling.
+        ticker_name (str): Name of the ticker for plot titles and warnings.
     
-    # Get common index after filtering
-    common_index = actuals_filtered.index
+    Returns:
+        matplotlib.figure.Figure or None: The generated matplotlib Figure object if plotting is successful,
+                                          otherwise None.
+    """
+    # Ensure actuals is a Series with a name for better warning messages
+    if not hasattr(actuals, 'name') or actuals.name is None:
+        actuals.name = "Actuals"
+
+    # Filter out models with no valid forecasts
+    valid_forecasts_dict = {}
     for model_name, forecast_series in forecasts_dict.items():
-        forecast_filtered = filter_trading_hours(forecast_series, freq)
-        forecasts_filtered[model_name] = forecast_filtered
-        common_index = common_index.intersection(forecast_filtered.index)
+        if isinstance(forecast_series, pd.Series) and not forecast_series.empty and not forecast_series.isna().all():
+            valid_forecasts_dict[model_name] = forecast_series
+        else:
+            print(f"Warning: Model '{model_name}' for {ticker_name} ({freq}) has no valid forecast data. Skipping.")
+
+    if not valid_forecasts_dict:
+        print(f"Warning: No valid forecast models to plot for {ticker_name} ({freq}). Skipping plot_forecast_comparison.")
+        return None
+
+    # Get common index among actuals and all valid forecasts
+    common_index = actuals.index
+    for model_name, forecast_series in valid_forecasts_dict.items():
+        common_index = common_index.intersection(forecast_series.index)
     
-    # Align to common index
-    actuals_plot = actuals_filtered.loc[common_index]
-    forecasts_plot = {model: forecasts_filtered[model].loc[common_index] 
-                     for model in forecasts_filtered.keys()}
-    
+    if common_index.empty:
+        print(f"Warning: No common index found between actuals and forecasts for {ticker_name} ({freq}). Skipping plot_forecast_comparison.")
+        return None
+
+    actuals_plot = actuals.loc[common_index]
+    forecasts_plot = {model: valid_forecasts_dict[model].loc[common_index] 
+                      for model in valid_forecasts_dict.keys()}
+
+    # Final check: if actuals_plot is empty or all NaN after alignment, skip plotting
+    if actuals_plot.empty or actuals_plot.isna().all():
+        print(f"Warning: Actuals data is empty or all NaN for {ticker_name} ({freq}) after alignment. Skipping plot_forecast_comparison.")
+        return None
+
     plt.figure(figsize=(14, 7))
     
-    # For high-frequency data, use different plotting approach
+    # Determine sampling frequency for high-frequency data to avoid overly dense plots
+    sample_freq = 1
     if freq in ['5min', '5T', '5m'] and len(actuals_plot) > 1000:
-        # Sample data for visualization (every 20th point for 5-min data)
-        sample_freq = max(1, len(actuals_plot) // 500)  # Show ~500 points max
-        actuals_sample = actuals_plot.iloc[::sample_freq]
-        forecasts_sample = {model: series.iloc[::sample_freq] 
-                          for model, series in forecasts_plot.items()}
-        
-        plt.plot(actuals_sample.index, actuals_sample.values, 
-                label='Real Value', color='black', linewidth=1.5, alpha=0.8)
-        
-        for model_name, forecast_series in forecasts_sample.items():
-            plt.plot(forecast_series.index, forecast_series.values, 
-                    label=model_name, linestyle='--', alpha=0.7)
-        
-        plt.title(f'Forecasted vs Observed (Frequency: {freq}) - Sampled Data')
-        
+        sample_freq = max(1, len(actuals_plot) // 500)  # Aim for max ~500 points
     elif freq in ['h', 'H', 'Hourly'] and len(actuals_plot) > 200:
-        # Sample hourly data if too dense
-        sample_freq = max(1, len(actuals_plot) // 200)
-        actuals_sample = actuals_plot.iloc[::sample_freq]
-        forecasts_sample = {model: series.iloc[::sample_freq] 
-                          for model, series in forecasts_plot.items()}
-        
-        plt.plot(actuals_sample.index, actuals_sample.values, 
-                label='Real Value', color='black', linewidth=2, marker='o', markersize=3)
-        
-        for model_name, forecast_series in forecasts_sample.items():
-            plt.plot(forecast_series.index, forecast_series.values, 
-                    label=model_name, linestyle='--', marker='s', markersize=2)
-        
-        plt.title(f'Forecasted vs Observed (Frequency: {freq}) - Sampled Data')
-        
-    else:
-        # Daily data or small datasets - plot all points
-        plt.plot(actuals_plot.index, actuals_plot.values, 
-                label='Real Value', color='black', linewidth=2.5, marker='o')
+        sample_freq = max(1, len(actuals_plot) // 200) # Aim for max ~200 points
 
-        for model_name, forecast_series in forecasts_plot.items():
-            plt.plot(forecast_series.index, forecast_series.values, 
-                    label=model_name, linestyle='--')
-        
-        plt.title(f'Forecasted vs Observed (Frequency: {freq})')
-
+    actuals_sample = actuals_plot.iloc[::sample_freq]
+    forecasts_sample = {model: series.iloc[::sample_freq] 
+                        for model, series in forecasts_plot.items()}
+    
+    # Plot actual values
+    plt.plot(actuals_sample.index, actuals_sample.values, 
+             label='Real Value', color='black', linewidth=1.5, alpha=0.8)
+    
+    # Plot forecasted values
+    for model_name, forecast_series in forecasts_sample.items():
+        plt.plot(forecast_series.index, forecast_series.values, 
+                 label=model_name, linestyle='--', alpha=0.7)
+    
+    plt.title(f'{ticker_name} - Forecasted vs Observed (Frequency: {freq})', fontsize=16)
     plt.xlabel('Date')
     plt.ylabel('Annualized Volatility (%)')
     plt.legend()
     plt.grid(True, alpha=0.5)
     
-    # Rotate x-axis labels for better readability
     plt.xticks(rotation=45)
     plt.tight_layout()
     
     return plt.gcf()
 
-def plot_metrics_comparison(rmse_df, qlike_df, freq=''):
+
+def simple_evaluate_single_ticker(actuals: pd.Series, forecasts_dict: dict) -> pd.DataFrame:
     """
-    Creates enhanced bar charts to compare RMSE and QLIKE metrics across models.
-    This provides a clear, quantitative comparison of model performance and handles extreme outliers.
+    Performs a robust evaluation (RMSE only) for a single ticker across multiple models.
+    Includes checks for data validity (length, NaNs).
+
+    Args:
+        actuals (pd.Series): The true future values.
+        forecasts_dict (dict): A dictionary where keys are model names (str) and values are
+                               pd.Series representing forecasts from that model.
+
+    Returns:
+        pd.DataFrame: A DataFrame with RMSE results for each model, indexed by model name.
+                      Returns an empty DataFrame if no valid data for evaluation.
+    """
+    results = {}
+    
+    # Ensure actuals is a Series with a name for better warning messages
+    if not hasattr(actuals, 'name') or actuals.name is None:
+        actuals.name = "Actuals"
+
+    if actuals.empty or actuals.isna().all():
+        print(f"Warning: Actuals data for {actuals.name} is empty or all NaN. Cannot evaluate.")
+        return pd.DataFrame(columns=['RMSE'])
+
+    for model_name, forecast_series in forecasts_dict.items():
+        try:
+            # Ensure forecast_series is a pandas Series
+            if not isinstance(forecast_series, pd.Series):
+                print(f"  Warning: Forecast for model '{model_name}' is not a pandas Series. Skipping.")
+                results[model_name] = {'RMSE': np.nan}
+                continue
+
+            # Align actuals and forecasts based on their index
+            common_index = actuals.index.intersection(forecast_series.index)
+            
+            actuals_aligned = actuals.loc[common_index]
+            forecast_aligned = forecast_series.loc[common_index]
+
+            # Check for sufficient and non-NaN data after alignment
+            if actuals_aligned.empty or forecast_aligned.empty:
+                print(f"  Warning: No common data points for {model_name}. Skipping evaluation.")
+                results[model_name] = {'RMSE': np.nan}
+                continue
+
+            if actuals_aligned.isna().any() or forecast_aligned.isna().any():
+                print(f"  Warning: {model_name} has NaN values after alignment. RMSE might be affected or calculation skipped.")
+                # Option 1: Drop NaNs (if you want to evaluate on available non-NaN data)
+                valid_data_mask = actuals_aligned.notna() & forecast_aligned.notna()
+                actuals_clean = actuals_aligned[valid_data_mask]
+                forecast_clean = forecast_aligned[valid_data_mask]
+
+                if actuals_clean.empty:
+                    print(f"  Warning: No valid non-NaN data points for {model_name} after cleaning. Skipping evaluation.")
+                    results[model_name] = {'RMSE': np.nan}
+                    continue
+            else:
+                actuals_clean = actuals_aligned
+                forecast_clean = forecast_aligned
+
+            # Calculate RMSE
+            rmse = np.sqrt(mean_squared_error(actuals_clean, forecast_clean))
+            results[model_name] = {'RMSE': rmse}
+            
+        except Exception as e:
+            print(f"  Error evaluating {model_name}: {e}. Setting RMSE to NaN.")
+            results[model_name] = {'RMSE': np.nan}
+    
+    return pd.DataFrame(results).T
+
+def plot_metrics_comparison(rmse_df, freq=''):
+    """
+    Creates enhanced bar charts to compare RMSE metrics across models.
+    This provides a clear, quantitative comparison of model performance.
     """
     plt.style.use('seaborn-v0_8-whitegrid')
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 14))
+    fig, ax1 = plt.subplots(1, 1, figsize=(16, 7)) # Only one subplot for RMSE
     
     rmse_df.plot(kind='bar', ax=ax1, width=0.8, colormap='viridis')
     ax1.set_title(f'Root Mean Squared Error (RMSE) per Horizon\n(Frequency: {freq})', fontsize=16, weight='bold')
@@ -218,29 +226,9 @@ def plot_metrics_comparison(rmse_df, qlike_df, freq=''):
     ax1.tick_params(axis='x', rotation=45, labelsize=11)
     ax1.grid(axis='y', linestyle='--', alpha=0.7)
     ax1.legend(title='Models', loc='upper right')
-    ax1.set_xlabel('')
+    ax1.set_xlabel('Forecasting Horizon', fontsize=12) # Changed x-label for clarity
 
-    qlike_df.plot(kind='bar', ax=ax2, width=0.8, colormap='plasma')
-    ax2.set_title(f'QLIKE Loss per Horizon\n(Frequency: {freq})', fontsize=16, weight='bold')
-    ax2.set_xlabel('Forecasting Horizon', fontsize=12)
-    ax2.set_ylabel('QLIKE Loss', fontsize=12)
-    ax2.tick_params(axis='x', rotation=45, labelsize=11)
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-    ax2.legend(title='Models', loc='upper right')
-    
-    max_val = qlike_df.max().max()
-    p99 = qlike_df.stack().quantile(0.99)
-    
-    if max_val > p99 * 1.5:
-        ax2.set_ylim(top=p99 * 1.2)
-        ax2.text(0.98, 0.95, 'Note: Y-axis capped to show detail.\nExtreme outlier(s) not fully shown.',
-                 transform=ax2.transAxes,
-                 horizontalalignment='right',
-                 verticalalignment='top',
-                 fontsize=10,
-                 bbox=dict(boxstyle='round,pad=0.5', fc='wheat', alpha=0.7))
-
-    plt.tight_layout(h_pad=4)
+    plt.tight_layout()
     
     return fig
 
@@ -250,20 +238,18 @@ def plot_error_diagnostics(actuals, forecasts_dict, freq=''):
     Applies trading hours filtering for intraday data.
     """
     # Apply trading hours filter
-    actuals_filtered = filter_trading_hours(actuals, freq)
-    forecasts_filtered = {}
+    forecasts = {}
     
     # Get common index after filtering
-    common_index = actuals_filtered.index
+    common_index = actuals.index
     for model_name, forecast_series in forecasts_dict.items():
-        forecast_filtered = filter_trading_hours(forecast_series, freq)
-        forecasts_filtered[model_name] = forecast_filtered
-        common_index = common_index.intersection(forecast_filtered.index)
+        forecasts[model_name] = forecast_series
+        common_index = common_index.intersection(forecast_series.index)
     
     # Align to common index
-    actuals_plot = actuals_filtered.loc[common_index]
-    forecasts_plot = {model: forecasts_filtered[model].loc[common_index] 
-                     for model in forecasts_filtered.keys()}
+    actuals_plot = actuals.loc[common_index]
+    forecasts_plot = {model: forecasts[model].loc[common_index] 
+                     for model in forecasts.keys()}
     
     models = list(forecasts_plot.keys())
     n_models = len(models)
@@ -329,7 +315,7 @@ def plot_error_diagnostics(actuals, forecasts_dict, freq=''):
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     return fig
 
-def vol_scaler(log_rv_series, freq):
+def vol_scaler(log_rv_df, freq):
     """
     Transforms log realized volatility to annualized volatility in percentage terms.
     Uses more robust scaling for high-frequency data to prevent unrealistic values.
@@ -342,13 +328,13 @@ def vol_scaler(log_rv_series, freq):
     ann_factors = {
         'D': 252,
         'Daily': 252,
-        'h': 252 * 24,
-        'H': 252 * 24,
-        'Hourly': 252 * 24,
-        '5m': 252 * 24 * 12,
-        '5min': 252 * 24 * 12,
-        '5T': 252 * 24 * 12,
-        '5-Minutes': 252 * 24 * 12
+        'h': 252 * 8,
+        'H': 252 * 8,
+        'Hourly': 252 * 8,
+        '5m': 252 * 8 * 12,
+        '5min': 252 * 8 * 12,
+        '5T': 252 * 8 * 12,
+        '5-Minutes': 252 * 8 * 12
     }
     
     if freq not in ann_factors:
@@ -357,29 +343,152 @@ def vol_scaler(log_rv_series, freq):
     else:
         factor = ann_factors[freq]
 
-    # More aggressive clipping for high-frequency data
-    if freq in ['5m', '5min', '5T', '5-Minutes']:
-        # For 5-minute data, use tighter bounds based on your actual data range
-        log_rv_clipped = np.clip(log_rv_series, -18, -10)  # More realistic range for 5-min
-        print(f"5-min data: Original range [{log_rv_series.min():.3f}, {log_rv_series.max():.3f}] -> Clipped range [{log_rv_clipped.min():.3f}, {log_rv_clipped.max():.3f}]")
-    elif freq in ['h', 'H', 'Hourly']:
-        # For hourly data
-        log_rv_clipped = np.clip(log_rv_series, -16, -8)  # More realistic range for hourly
-        print(f"Hourly data: Original range [{log_rv_series.min():.3f}, {log_rv_series.max():.3f}] -> Clipped range [{log_rv_clipped.min():.3f}, {log_rv_clipped.max():.3f}]")
-    else:
-        # For daily data, keep original bounds
-        log_rv_clipped = np.clip(log_rv_series, -20, 5)
     
-    rv = np.exp(log_rv_clipped)
+    rv = np.exp(log_rv_df)
     rvol = np.sqrt(rv)
     ann_vol_pct = rvol * np.sqrt(factor) * 100
     
-    # Additional sanity check: cap at reasonable volatility levels
-    if freq in ['5m', '5min', '5T', '5-Minutes']:
-        ann_vol_pct = np.clip(ann_vol_pct, 0, 200)  # Cap at 200% annualized vol for 5-min
-    elif freq in ['h', 'H', 'Hourly']:
-        ann_vol_pct = np.clip(ann_vol_pct, 0, 150)  # Cap at 150% annualized vol for hourly
-    else:
-        ann_vol_pct = np.clip(ann_vol_pct, 0, 100)   # Cap at 100% annualized vol for daily
-    
     return ann_vol_pct
+
+
+def calculate_comprehensive_metrics(forecasts_dict, actuals_dict, tickers):
+    """Calculate performance metrics (RMSE) for all tickers and models"""
+    results = {}
+    
+    for ticker in tickers:
+        if ticker not in actuals_dict:
+            continue
+            
+        ticker_actuals = actuals_dict[ticker]
+        ticker_forecasts = {}
+        
+        # Collect forecasts for this ticker
+        for model_name in forecasts_dict.keys():
+            if ticker in forecasts_dict[model_name]:
+                forecast_series = forecasts_dict[model_name][ticker]
+                # Align indices
+                if len(forecast_series) == len(ticker_actuals):
+                    ticker_forecasts[model_name] = forecast_series.values
+        
+        if not ticker_forecasts:
+            continue
+            
+        # Calculate metrics for this ticker
+        ticker_results = {}
+        for model, forecast_vals in ticker_forecasts.items():
+            try:
+                rmse = np.sqrt(mean_squared_error(ticker_actuals.values, forecast_vals))
+                ticker_results[model] = {'RMSE': rmse} # Only RMSE
+            except Exception as e:
+                print(f"Error calculating metrics for {ticker} {model}: {e}")
+                ticker_results[model] = {'RMSE': np.nan} # Only RMSE
+        
+        results[ticker] = ticker_results
+    
+    return results
+
+
+def create_summary_table(results, freq_name):
+    """Create summary statistics (RMSE) across all tickers"""
+    summary_data = []
+    
+    models = set()
+    for ticker_results in results.values():
+        models.update(ticker_results.keys())
+    
+    for model in models:
+        rmse_values = []
+        
+        for ticker, ticker_results in results.items():
+            if model in ticker_results:
+                rmse_val = ticker_results[model]['RMSE']
+                if not (np.isnan(rmse_val)):
+                    rmse_values.append(rmse_val)
+        
+        if rmse_values:
+            summary_data.append({
+                'Model': model,
+                'RMSE_Mean': np.mean(rmse_values),
+                'RMSE_Std': np.std(rmse_values),
+                'RMSE_Median': np.median(rmse_values),
+                'N_Tickers': len(rmse_values)
+            })
+    
+    summary_df = pd.DataFrame(summary_data)
+    
+    print(f"\n{freq_name} Summary (across {len(results)} tickers):")
+    print("="*50)
+    print(summary_df.round(4))
+    
+    return summary_df
+
+def create_performance_heatmap(results, metric='RMSE', freq_name=''):
+    """Create heatmap showing performance across tickers and models"""
+    # Prepare data for heatmap
+    models = set()
+    for ticker_results in results.values():
+        models.update(ticker_results.keys())
+    models = sorted(list(models))
+    
+    heatmap_data = []
+    ticker_names = []
+    
+    for ticker in sorted(results.keys()):
+        ticker_row = []
+        for model in models:
+            if model in results[ticker]:
+                value = results[ticker][model][metric]
+                # Replace NaN or None with 0 for visualization
+                ticker_row.append(value if not (np.isnan(value) or value is None) else 0)
+            else:
+                ticker_row.append(0)
+        heatmap_data.append(ticker_row)
+        ticker_names.append(ticker)
+    
+    # Create heatmap
+    plt.figure(figsize=(10, 8))
+    heatmap_df = pd.DataFrame(heatmap_data, index=ticker_names, columns=models)
+    
+    # Use different color scales for different metrics
+    cmap = 'Reds' # Only RMSE, so a single cmap is fine
+    fmt = '.3f'
+    
+    # Create a mask for zero values (missing data)
+    mask = heatmap_df == 0
+    
+    sns.heatmap(heatmap_df, annot=True, fmt=fmt, cmap=cmap, mask=mask,
+                cbar_kws={'label': metric}, linewidths=0.5)
+    
+    plt.title(f'{freq_name} {metric} Performance Across Tickers and Models', fontsize=14, pad=20)
+    plt.xlabel('Models', fontsize=12)
+    plt.ylabel('Tickers', fontsize=12)
+    plt.tight_layout()
+    
+    return plt.gcf()
+
+
+
+def create_model_comparison_plot(summary_df, freq_name):
+    """Create bar plots comparing model performance (RMSE only)"""
+    fig, ax1 = plt.subplots(1, 1, figsize=(8, 6)) # Only one subplot for RMSE
+    
+    # RMSE comparison
+    models = summary_df['Model']
+    rmse_means = summary_df['RMSE_Mean']
+    rmse_stds = summary_df['RMSE_Std']
+    
+    bars1 = ax1.bar(models, rmse_means, yerr=rmse_stds, capsize=5, 
+                    color=['#FF6B6B', '#4ECDC4', '#45B7D1'], alpha=0.8)
+    ax1.set_title(f'{freq_name} RMSE Comparison (Mean ± Std)', fontsize=14)
+    ax1.set_ylabel('RMSE', fontsize=12)
+    ax1.set_xlabel('Models', fontsize=12)
+    ax1.grid(axis='y', alpha=0.3)
+    
+    # Add value labels on bars
+    for bar, mean_val, std_val in zip(bars1, rmse_means, rmse_stds):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + std_val,
+                f'{mean_val:.3f}', ha='center', va='bottom', fontsize=10)
+    
+    plt.tight_layout()
+    return fig
