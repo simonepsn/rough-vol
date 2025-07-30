@@ -123,9 +123,9 @@ def prepare_har_data(log_rv_data, freq='D', ticker=None):
     if freq == 'D':
         periods_in_day = 1
     elif freq == 'h':
-        periods_in_day = 1 * 8
+        periods_in_day = 1 * 6
     elif freq == '5min':
-        periods_in_day = 8 * 12
+        periods_in_day = 6 * 12
     else:
         raise ValueError("Freq not supported. Use 'D', 'h', or '5min'.")
     

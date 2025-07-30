@@ -337,9 +337,11 @@ def vol_scaler(log_rv_df, freq, modeltype):
     
     factor = ann_factors[freq]
 
-    if modeltype in ['HAR', 'GARCH']:
+    if modeltype in ['HAR']:
         rv = np.exp(log_rv_df)
-        return np.sqrt(rv) * np.sqrt(factor) * 100
+        return np.sqrt(rv * factor) * 100
+    elif modeltype in ['GARCH']:
+        return np.sqrt(factor * log_rv_df) * 100
     elif modeltype == 'RFSV':
         return np.exp(log_rv_df) * np.sqrt(factor) * 100
     else:

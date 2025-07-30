@@ -154,10 +154,10 @@ for ticker in tickers:
             all_ticker_summaries['daily'][ticker] = results_d
             
             # Scale for visualization
-            actuals_d_scaled = vol_scaler(actuals_d, freq='D', modeltype='RFSV')
+            actuals_d_scaled = actuals_d                                                        # vol_scaler(actuals_d, freq='D', modeltype='RFSV')
             forecasts_d_scaled = {}
             for model, forecast in forecasts_d_dict.items():
-                forecasts_d_scaled[model] = vol_scaler(forecast, freq='D', modeltype=get_model_output_type(model))
+                forecasts_d_scaled[model] = forecast                                            # vol_scaler(forecast, freq='D', modeltype=get_model_output_type(model))
             
             # Create plots
             fig_d = plot_forecast_comparison(actuals_d_scaled, forecasts_d_scaled, freq='D', ticker_name=ticker)
@@ -187,10 +187,10 @@ for ticker in tickers:
             all_ticker_summaries['hourly'][ticker] = results_h
             
             # Scale for visualization
-            actuals_h_scaled = vol_scaler(actuals_h, freq='h', modeltype='RFSV')
+            actuals_h_scaled = actuals_h                                                            # vol_scaler(actuals_h, freq='h', modeltype='RFSV')
             forecasts_h_scaled = {}
             for model, forecast in forecasts_h_dict.items():
-                forecasts_h_scaled[model] = vol_scaler(forecast, freq='h', modeltype=get_model_output_type(model))
+                forecasts_h_scaled[model] = forecast                                                # vol_scaler(forecast, freq='h', modeltype=get_model_output_type(model))
             
             # Create plots
             fig_h = plot_forecast_comparison(actuals_h_scaled, forecasts_h_scaled, freq='h', ticker_name=ticker)
@@ -218,10 +218,10 @@ for ticker in tickers:
             all_ticker_summaries['5min'][ticker] = results_5m
             
             # Scale for visualization
-            actuals_5m_scaled = vol_scaler(actuals_5m, freq='5T', modeltype='RFSV')
+            actuals_5m_scaled = actuals_5m                                              # vol_scaler(actuals_5m, freq='5T', modeltype='RFSV')
             forecasts_5m_scaled = {}
             for model, forecast in forecasts_5m_dict.items():
-                forecasts_5m_scaled[model] = vol_scaler(forecast, freq='5T', modeltype=get_model_output_type(model))
+                forecasts_5m_scaled[model] = forecast                                   # vol_scaler(forecast, freq='5T', modeltype=get_model_output_type(model))
             
             # Create plots
             fig_5m = plot_forecast_comparison(actuals_5m_scaled, forecasts_5m_scaled, freq='5T', ticker_name=ticker)

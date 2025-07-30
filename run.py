@@ -93,7 +93,7 @@ train_har_d = {
 }
 
 actuals_d = lrv_d.iloc[-holdout_period:]
-window_size_d = min(len(train_lrv_d) // 2, 252)
+window_size_d = min(len(train_lrv_d) // 2, 250)
 analysis_frequencies.append('daily')
 window_sizes['daily'] = window_size_d
 print(f"Daily analysis enabled: {len(train_lrv_d)} training obs, {len(actuals_d)} test obs")
@@ -108,7 +108,7 @@ train_har_h = {
 }
 
 actuals_h = lrv_h.iloc[-holdout_period:]
-window_size_h = min(len(train_lrv_h) // 2, 252)
+window_size_h = min(len(train_lrv_h) // 2, 250)
 analysis_frequencies.append('hourly')
 window_sizes['hourly'] = window_size_h
 print(f"Hourly analysis enabled: {len(train_lrv_h)} training obs, {len(actuals_h)} test obs")
@@ -123,7 +123,7 @@ train_har_5m = {
 }
 
 actuals_5m = lrv_5m.iloc[-holdout_period:]
-window_size_5m = min(len(train_lrv_5m) // 2, 252)
+window_size_5m = min(len(train_lrv_5m) // 2, 250)
 analysis_frequencies.append('5min')
 window_sizes['5min'] = window_size_5m
 print(f"5-minute analysis enabled: {len(train_lrv_5m)} training obs, {len(actuals_5m)} test obs")
