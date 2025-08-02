@@ -42,7 +42,7 @@ def estimate_h_loglog_weighted(series: pd.Series, scales: List[int], q: int = 2)
             
     try:
         slope, intercept = np.polyfit(log_tau, log_moments, deg=1, w=weights)
-        h = np.clip(slope / q, 0.01, 0.99) # Clip H to a reasonable range
+        h = np.clip(slope / q, 0.01, 0.99)
         nu = np.sqrt(np.exp(intercept))
     except np.linalg.LinAlgError:
         # Handle cases where polyfit might fail (e.g., singular matrix)
@@ -164,6 +164,8 @@ def rolling_forecast_rfsv(
     window = log_rv_series.iloc[-rolling_window:]
     
     h, nu, _ = estimate_h_loglog_weighted(window, scales)
+
+    print(f"Estimated H: {h}, nu: {nu} for frequency '{freq}'")
     
     if np.isnan(h) or np.isnan(nu):
         forecast = np.full(horizon, np.nan)

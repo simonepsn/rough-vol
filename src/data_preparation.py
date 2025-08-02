@@ -74,10 +74,6 @@ def calculate_log_rv(df, resample_freq='1D', ticker_col=None):
             try:
                 price_series = pd.to_numeric(df[col], errors='coerce').dropna()
                 
-                if len(price_series) < 10:  # Skip if insufficient data
-                    print(f"Skipping {col}: insufficient data ({len(price_series)} observations)")
-                    continue
-                
                 # Calculate log returns
                 log_returns = np.log(price_series / price_series.shift(1)).dropna()
                 

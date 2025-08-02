@@ -3,8 +3,12 @@ import pandas as pd
 import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 from pathlib import Path
 from sklearn.metrics import mean_squared_error
+from properscoring import crps_ensemble
+from scipy.stats import norm
+
 
 from src.analysis_visualization import (
     plot_forecast_comparison,
@@ -17,9 +21,9 @@ from src.analysis_visualization import (
     get_model_output_type
 )
 
-# ==============================================================================
-#                     --- LOAD ALL TICKER FORECASTS ---
-# ==============================================================================
+# =============================================================================#
+#                     --- LOAD ALL TICKER FORECASTS ---                        #
+# =============================================================================#
 
 print("=== COMPREHENSIVE MULTI-TICKER ANALYSIS ===")
 print("Loading all ticker forecasts...")
@@ -49,9 +53,9 @@ except Exception as e:
     print(f"❌ Error loading data: {e}")
     exit(1)
 
-# ==============================================================================
-#                     --- COMPREHENSIVE PERFORMANCE ANALYSIS ---
-# ==============================================================================
+# =============================================================================#
+#                     --- COMPREHENSIVE PERFORMANCE ANALYSIS ---               #
+# =============================================================================#
 
 # Daily analysis
 daily_forecasts = {
@@ -76,19 +80,17 @@ fivemin_forecasts = {
 }
 fivemin_results = calculate_comprehensive_metrics(fivemin_forecasts, fivemin_data['actuals_5m'], tickers)
 
-
-# ==============================================================================
-#                     --- SUMMARY STATISTICS AND RANKINGS ---
-# ==============================================================================
+# =============================================================================#
+#                     --- SUMMARY STATISTICS AND RANKINGS ---                  #
+# =============================================================================#
 
 daily_summary = create_summary_table(daily_results, "DAILY")
 hourly_summary = create_summary_table(hourly_results, "HOURLY") 
 fivemin_summary = create_summary_table(fivemin_results, "5-MINUTE")
 
-
-# ==============================================================================
-#                     --- VISUALIZATION: PERFORMANCE HEATMAPS ---
-# ==============================================================================
+# =============================================================================#
+#                     --- VISUALIZATION: PERFORMANCE HEATMAPS ---              #
+# =============================================================================#
 
 # Create directories for plots
 Path("forecast_results/plots/multi_ticker").mkdir(parents=True, exist_ok=True)
@@ -119,9 +121,10 @@ fig_5min_comp = create_model_comparison_plot(fivemin_summary, '5-Minute')
 fig_5min_comp.savefig("forecast_results/plots/multi_ticker/5min_model_comparison.png", dpi=300, bbox_inches='tight')
 
 plt.close('all')
-# ==============================================================================
-#                     --- INDIVIDUAL TICKER ANALYSIS ---
-# ==============================================================================
+
+# =============================================================================#
+#                     --- INDIVIDUAL TICKER ANALYSIS ---                       #
+# =============================================================================#
 
 print("\n" + "="*50)
 print("INDIVIDUAL TICKER ANALYSIS")
@@ -133,9 +136,9 @@ all_ticker_summaries = {'daily': {}, 'hourly': {}, '5min': {}}
 for ticker in tickers:
     print(f"\n--- Analyzing {ticker} ---")
     
-    # ==============================================================================
-    #                              --- DAILY ANALYSIS ---
-    # ==============================================================================
+    # =============================================================================#
+    #                              --- DAILY ANALYSIS ---                          #
+    # =============================================================================#
     
     if ticker in daily_data['actuals_d']:
         actuals_d = daily_data['actuals_d'][ticker]
@@ -152,23 +155,22 @@ for ticker in tickers:
             # Evaluate performance
             results_d = simple_evaluate_single_ticker(actuals_d, forecasts_d_dict)
             all_ticker_summaries['daily'][ticker] = results_d
-            
-            # Scale for visualization
-            actuals_d_scaled = actuals_d                                                        # vol_scaler(actuals_d, freq='D', modeltype='RFSV')
-            forecasts_d_scaled = {}
+
+            forecast_d = {}
             for model, forecast in forecasts_d_dict.items():
-                forecasts_d_scaled[model] = forecast                                            # vol_scaler(forecast, freq='D', modeltype=get_model_output_type(model))
-            
+                forecast_d[model] = forecast
+
+
             # Create plots
-            fig_d = plot_forecast_comparison(actuals_d_scaled, forecasts_d_scaled, freq='D', ticker_name=ticker)
+            fig_d = plot_forecast_comparison(actuals_d, forecasts_d_dict, freq='D', ticker_name=ticker)
             fig_d.savefig(f"forecast_results/plots/individual_tickers/{ticker}_daily_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_d)
             
             print(f"  Daily {ticker} - RMSE: {dict(results_d['RMSE'])}")
     
-    # ==============================================================================
-    #                             --- HOURLY ANALYSIS ---
-    # ==============================================================================
+    # =============================================================================#
+    #                             --- HOURLY ANALYSIS ---                          #
+    # =============================================================================#
     
     if ticker in hourly_data['actuals_h']:
         actuals_h = hourly_data['actuals_h'][ticker]
@@ -182,26 +184,22 @@ for ticker in tickers:
             forecasts_h_dict['RFSV'] = hourly_data['forecast_rfsv_h'][ticker]
         
         if forecasts_h_dict:
-            # Evaluate performance
             results_h = simple_evaluate_single_ticker(actuals_h, forecasts_h_dict)
             all_ticker_summaries['hourly'][ticker] = results_h
-            
-            # Scale for visualization
-            actuals_h_scaled = actuals_h                                                            # vol_scaler(actuals_h, freq='h', modeltype='RFSV')
-            forecasts_h_scaled = {}
+
             for model, forecast in forecasts_h_dict.items():
-                forecasts_h_scaled[model] = forecast                                                # vol_scaler(forecast, freq='h', modeltype=get_model_output_type(model))
-            
+                forecasts_h_dict[model] = forecast
+
             # Create plots
-            fig_h = plot_forecast_comparison(actuals_h_scaled, forecasts_h_scaled, freq='h', ticker_name=ticker)
+            fig_h = plot_forecast_comparison(actuals_h, forecasts_h_dict, freq='h', ticker_name=ticker)
             fig_h.savefig(f"forecast_results/plots/individual_tickers/{ticker}_hourly_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_h)
             
             print(f"  Hourly {ticker} - RMSE: {dict(results_h['RMSE'])}")
     
-    # ==============================================================================
-    #                            --- 5-MINUTE ANALYSIS ---
-    # ==============================================================================
+    # =============================================================================#
+    #                            --- 5-MINUTE ANALYSIS ---                         #
+    # =============================================================================#
     
     if ticker in fivemin_data['actuals_5m']:
         actuals_5m = fivemin_data['actuals_5m'][ticker]
@@ -213,26 +211,37 @@ for ticker in tickers:
             forecasts_5m_dict['RFSV'] = fivemin_data['forecast_rfsv_5m'][ticker]
         
         if forecasts_5m_dict:
-            # Evaluate performance
             results_5m = simple_evaluate_single_ticker(actuals_5m, forecasts_5m_dict)
             all_ticker_summaries['5min'][ticker] = results_5m
             
-            # Scale for visualization
-            actuals_5m_scaled = actuals_5m                                              # vol_scaler(actuals_5m, freq='5T', modeltype='RFSV')
-            forecasts_5m_scaled = {}
+
+            forecasts_5m = {}
             for model, forecast in forecasts_5m_dict.items():
-                forecasts_5m_scaled[model] = forecast                                   # vol_scaler(forecast, freq='5T', modeltype=get_model_output_type(model))
+                forecasts_5m[model] = forecast
             
             # Create plots
-            fig_5m = plot_forecast_comparison(actuals_5m_scaled, forecasts_5m_scaled, freq='5T', ticker_name=ticker)
+            fig_5m = plot_forecast_comparison(actuals_5m, forecasts_5m, freq='5T', ticker_name=ticker)
             fig_5m.savefig(f"forecast_results/plots/individual_tickers/{ticker}_5min_forecast.png", dpi=300, bbox_inches='tight')
             plt.close(fig_5m)
             
             print(f"  5-min {ticker} - RMSE: {dict(results_5m['RMSE'])}")
 
-# ==============================================================================
-#                         --- AGGREGATE RESULTS SUMMARY ---
-# ==============================================================================
+
+# =============================================================================#
+#                         --- ADDITIONAL TESTING ---                           #
+#==============================================================================#
+
+        
+
+
+
+
+
+
+
+# =============================================================================#
+#                         --- AGGREGATE RESULTS SUMMARY ---                    #
+# =============================================================================#
 
 print("\n" + "="*60)
 print("INDIVIDUAL TICKER ANALYSIS SUMMARY")

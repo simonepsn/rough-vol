@@ -14,3 +14,6 @@ forecast_results
 notebooks
 .vscode
 2 - sim.ipynb
+
+# Ignore Latex files
+latex

@@ -5,12 +5,18 @@ import pickle
 import sys
 import os
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 os.chdir(os.path.abspath("/home/simonepsn/Desktop/rough-vol/")) 
+
+from statsmodels.tsa.stattools import adfuller
 
 from src.data_preparation import calculate_log_rv, prepare_har_data
 from src.garch import forecast_garch_rolling
 from src.har import forecast_har_rolling
 from src.rfsv import rolling_forecast_rfsv
+
 
 
 
@@ -55,6 +61,61 @@ for col in df_d.columns:
         lret_hourly_data[ticker] = np.log(df_h[col] / df_h[col].shift(1)).dropna()
         lret_5min_data[ticker] = np.log(df_5m[col] / df_5m[col].shift(1)).dropna()
 
+all_tickers = [col.replace('_close', '') for col in df_d.columns if '_close' in col]
+
+freq_data_mapping = {
+    'daily': (df_d, 'Daily'),
+    'hourly': (df_h, 'Hourly'), 
+    '5min': (df_5m, '5-Minute')
+}
+
+tickers_per_figure = 3
+num_figures = (len(all_tickers) + tickers_per_figure - 1) // tickers_per_figure
+
+for fig_idx in range(num_figures):
+    start_idx = fig_idx * tickers_per_figure
+    end_idx = min(start_idx + tickers_per_figure, len(all_tickers))
+    current_tickers = all_tickers[start_idx:end_idx]
+    
+    # Create subplot grid: rows = frequencies, cols = tickers
+    fig, axes = plt.subplots(3, len(current_tickers), figsize=(5*len(current_tickers), 12))
+    
+    # Handle case when only one ticker (axes becomes 1D)
+    if len(current_tickers) == 1:
+        axes = axes.reshape(-1, 1)
+    
+    fig.suptitle(f'Price Series - Figure {fig_idx + 1}', fontsize=16, fontweight='bold')
+    
+    # Plot each ticker for each frequency
+    for freq_idx, (freq_name, (df_freq, freq_label)) in enumerate(freq_data_mapping.items()):
+        for ticker_idx, ticker in enumerate(current_tickers):
+            col_name = f'{ticker}_close'
+            
+            if col_name in df_freq.columns:
+                ax = axes[freq_idx, ticker_idx]
+                ax.plot(df_freq.index, df_freq[col_name], color='blue', alpha=0.7, linewidth=1)
+                ax.set_title(f'{ticker} - {freq_label}', fontsize=10)
+                ax.grid(True, alpha=0.3)
+                
+                # Format x-axis labels
+                ax.tick_params(axis='x', rotation=45, labelsize=8)
+                ax.tick_params(axis='y', labelsize=8)
+                
+                # Set labels only for edge subplots
+                if freq_idx == 2:  # Bottom row
+                    ax.set_xlabel('Date', fontsize=9)
+                if ticker_idx == 0:  # Left column
+                    ax.set_ylabel('Price', fontsize=9)
+            else:
+                # If ticker doesn't exist, hide the subplot
+                axes[freq_idx, ticker_idx].axis('off')
+    
+    # Adjust layout and save
+    plt.tight_layout()
+    filename = f'other/figures/price_series_figure_{fig_idx + 1}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+
 # Convert to DataFrames
 lret_d = pd.DataFrame(lret_daily_data)
 lret_h = pd.DataFrame(lret_hourly_data)
@@ -77,6 +138,150 @@ har_h_data = prepare_har_data(lrv_h, freq='h')
 har_5m_data = prepare_har_data(lrv_5m, freq='5min')
 
 print(f"HAR data prepared for {len(har_d_data)} tickers (daily)")
+
+# ==============================================================================#
+#                              --- ADF TEST ---                                 #
+# ==============================================================================#
+
+adf_results_d = {}
+adf_results_h = {}
+adf_results_5m = {}
+
+# ADF test sui log realized volatility (per testare persistenza della volatilità)
+for ticker in lrv_d.columns:
+    # Daily log RV
+    adf_result = adfuller(lrv_d[ticker].dropna())
+    adf_results_d[ticker] = {
+        'adf_stat': adf_result[0],
+        'p_value': adf_result[1],
+    }
+
+for ticker in lrv_h.columns:
+    # Hourly log RV
+    adf_result = adfuller(lrv_h[ticker].dropna())
+    adf_results_h[ticker] = {
+        'adf_stat': adf_result[0],
+        'p_value': adf_result[1],
+    }
+
+for ticker in lrv_5m.columns:
+    # 5-minute log RV
+    adf_result = adfuller(lrv_5m[ticker].dropna())
+    adf_results_5m[ticker] = {
+        'adf_stat': adf_result[0],
+        'p_value': adf_result[1],
+    }
+
+# Generate a summary table to print as a png
+freq = ['daily', 'hourly', '5min']
+colors = {
+    'daily': '#1f77b4',
+    'hourly': '#ff7f0e',
+    '5min': '#2ca02c'
+}
+
+data = []
+for freq_name in freq:
+    for ticker in lrv_d.columns:  # Usa lrv_d.columns
+        if freq_name == 'daily':
+            adf_stat = adf_results_d[ticker]['adf_stat']
+            p_value = adf_results_d[ticker]['p_value']
+        elif freq_name == 'hourly':
+            adf_stat = adf_results_h[ticker]['adf_stat']
+            p_value = adf_results_h[ticker]['p_value']
+        elif freq_name == '5min':
+            adf_stat = adf_results_5m[ticker]['adf_stat']
+            p_value = adf_results_5m[ticker]['p_value']
+        
+        data.append({
+            'freq': freq_name,
+            'color': colors[freq_name],
+            'ticker': ticker,
+            'adf_stat': adf_stat,
+            'p_value': p_value
+        })
+
+df_adf = pd.DataFrame(data)
+
+# Create a pivot table for better visualization
+
+pivot_adf = df_adf.pivot_table(
+    index='ticker',
+    columns='freq',
+    values=['adf_stat', 'p_value'],
+    aggfunc='first'
+).reset_index()
+pivot_adf.columns = ['_'.join(col).strip() for col in pivot_adf.columns.values]
+pivot_adf.rename(columns={'ticker_': 'ticker'}, inplace=True)
+
+# Create the table visualization
+fig, ax = plt.subplots(figsize=(14, 10))
+ax.axis('tight')
+ax.axis('off')
+
+# Format the data for better readability
+pivot_display = pivot_adf.copy()
+
+# Round numerical values e usa notazione scientifica per p-values piccoli
+numeric_cols = [col for col in pivot_display.columns if col != 'ticker']
+for col in numeric_cols:
+    if 'adf_stat' in col:
+        pivot_display[col] = pivot_display[col].round(3)
+    elif 'p_value' in col:
+        # Usa sempre notazione scientifica per p-values
+        pivot_display[col] = pivot_display[col].apply(lambda x: f"{x:.2e}" if not pd.isna(x) else 'NaN')
+
+# Create the table
+table = ax.table(cellText=pivot_display.values, 
+                colLabels=pivot_display.columns,
+                cellLoc='center', 
+                loc='center',
+                bbox=[0, 0, 1, 1])
+
+# Style the table
+table.auto_set_font_size(False)
+table.set_fontsize(9)
+table.scale(1.2, 2)
+
+# Color code the header
+for i in range(len(pivot_display.columns)):
+    table[(0, i)].set_facecolor('#4472C4')
+    table[(0, i)].set_text_props(weight='bold', color='white')
+
+# Color code p-values based on significance
+for i in range(1, len(pivot_display) + 1):
+    for j in range(len(pivot_display.columns)):
+        col_name = pivot_display.columns[j]
+        if 'p_value' in col_name:
+            p_val_original = pivot_adf.iloc[i-1, j]
+            if p_val_original < 0.01:
+                table[(i, j)].set_facecolor('#90EE90')  # Light green for highly significant
+            elif p_val_original < 0.05:
+                table[(i, j)].set_facecolor('#FFFF99')  # Light yellow for significant
+            elif p_val_original < 0.10:
+                table[(i, j)].set_facecolor('#FFB366')  # Light orange for marginally significant
+            else:
+                table[(i, j)].set_facecolor('#FFB3B3')  # Light red for non-significant 
+
+# Create legend
+legend_elements = [
+    plt.Rectangle((0,0),1,1, facecolor='#90EE90', label='p < 0.01 (Highly Significant)'),
+    plt.Rectangle((0,0),1,1, facecolor='#FFFF99', label='p < 0.05 (Significant)'),
+    plt.Rectangle((0,0),1,1, facecolor='#FFB366', label='p < 0.10 (Marginally Significant)'),
+    plt.Rectangle((0,0),1,1, facecolor='#FFB3B3', label='p ≥ 0.10 (Non-Significant)')
+]
+ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=2)
+
+# Save as PNG
+plt.tight_layout()
+plt.savefig('forecast_results/adf_test_results.png', dpi=300, bbox_inches='tight')
+plt.close()
+
+print("✅ ADF test results table saved as PNG: forecast_results/adf_test_results.png")
+
+# Also save as CSV for reference
+pivot_adf.to_csv('forecast_results/adf_test_results.csv', index=False)
+print("✅ ADF test results also saved as CSV: forecast_results/adf_test_results.csv")
 
 # Determine available analyses based on data length
 analysis_frequencies = []
@@ -156,7 +361,7 @@ if 'daily' in analysis_frequencies:
     forecast_garch_d = {}
     forecast_har_d = {}
     forecast_rfsv_d = {}
-    
+
     # Get all tickers
     tickers = list(lrv_d.columns)
     print(f"Processing {len(tickers)} tickers: {tickers}")
@@ -200,16 +405,16 @@ if 'daily' in analysis_frequencies:
         
         # RFSV
         try:
-            scales_d = [1, 2, 4, 8, 16, 22]
+            scales_d = [1, 2, 5, 10]
             forecast = rolling_forecast_rfsv(
                 ticker_lrv_d, 
                 scales=scales_d, 
                 horizon=holdout_period, 
-                rolling_window=window_sizes['daily'], 
+                rolling_window=100, 
                 n_sims=5, 
                 freq='D'
             )
-            
+        
             forecast_rfsv_d[ticker] = forecast.set_axis(ticker_actuals_d.index)
 
         except Exception as e:
@@ -242,7 +447,7 @@ if 'hourly' in analysis_frequencies:
     forecast_garch_h = {}
     forecast_har_h = {}
     forecast_rfsv_h = {}
-    
+
     # Get all tickers
     tickers = list(lrv_h.columns)
     print(f"Processing {len(tickers)} tickers: {tickers}")
@@ -286,7 +491,7 @@ if 'hourly' in analysis_frequencies:
 
         # RFSV
         try:
-            scales_h = [1, 2, 4, 8, 16, 32, 48]
+            scales_h = [1, 2, 5, 10, 20, 50]
             forecast = rolling_forecast_rfsv(
                 ticker_lrv_h, 
                 scales=scales_h, 
@@ -323,10 +528,10 @@ if '5min' in analysis_frequencies:
     print("="*50)
     
     # Initialize forecast dictionaries for each model
-    forecast_garch_5m = {}
+    # forecast_garch_5m = {}
     forecast_har_5m = {}
     forecast_rfsv_5m = {}
-    
+
     # Get all tickers
     tickers = list(lrv_5m.columns)
     print(f"Processing {len(tickers)} tickers: {tickers}")
@@ -371,7 +576,7 @@ if '5min' in analysis_frequencies:
         
         # RFSV
         try:
-            scales_5m = [1, 2, 4, 8, 16, 32, 64, 128]
+            scales_5m = [1, 2, 5, 10, 20, 50, 100]
             forecast = rolling_forecast_rfsv(
                 ticker_lrv_5m, 
                 scales=scales_5m, 
@@ -385,7 +590,7 @@ if '5min' in analysis_frequencies:
 
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
-    
+
     # Create summary DataFrame - only using HAR and RFSV for 5-minute (GARCH skipped)
     forecast_df_5m = pd.DataFrame()
 
@@ -446,7 +651,7 @@ if '5min' in analysis_frequencies:
         pickle.dump({
             'forecast_har_5m': forecast_har_5m,
             'forecast_rfsv_5m': forecast_rfsv_5m,
-            'actuals_5m': actuals_5m, 
+            'actuals_5m': actuals_5m,
             'tickers': list(lrv_5m.columns)
         }, f)
     print("All 5-minute ticker forecasts saved")
