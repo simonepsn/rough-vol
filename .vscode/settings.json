@@ -1,3 +1,64 @@
 {
-    "github.copilot.advanced": {}
+  "github.copilot.advanced": {},
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "pdflatex -> bibtex -> pdflatex x2",
+      "tools": ["pdflatex", "bibtex", "pdflatex", "pdflatex"]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "pdflatex",
+      "command": "pdflatex",
+      "args": [
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "%DOC%"
+      ]
+    },
+    {
+      "name": "bibtex",
+      "command": "bibtex",
+      "args": ["%DOCFILE%"]
+    }
+  ],
+  "latex-workshop.latex.clean.enabled": true,
+  "latex-workshop.latex.clean.onBuild": true,
+  "latex-workshop.latex.clean.fileTypes": [
+    "*.aux",
+    "*.log",
+    "*.out",
+    "*.toc",
+    "*.bbl",
+    "*.blg",
+    "*.synctex.gz"
+  ],
+  "latex-workshop.view.pdf.viewer": "tab",
+  "latex-workshop.latex.autoBuild.run": "never",
+  "editor.semanticHighlighting.enabled": false,
+  "latex-workshop.latex.rootFile.useSubFile": false,
+  "latex-workshop.latex.rootFile.doNotPrompt": true,
+  "latex-workshop.latex.rootFile.default": "latex/0_main.tex",
+  "ltex.ignoreCommands": [
+    "cite",
+    "ref",
+    "label",
+    "pageref",
+    "footnote",
+    "footnotemark",
+    "footnotetext",
+    "url",
+    "href",
+    "hyperref",
+    "autoref",
+    "eqref",
+    "cref",
+    "Cref",
+    "hyperlink",
+    "hyperimage",
+    "hyperbaseurl",
+    "hyperdef",
+    "hyperindex",
+    "hyperpageref"
+  ]
 }
