@@ -10,6 +10,7 @@ def forecast_har_rolling(har_data_complete, horizon, window_size=252, last_log_r
     """
     forecasts = []
     forecast_dates = []
+    coef_records = []
     
     # Start forecasting from the end of the training period
     start_idx = len(har_data_complete) - horizon
@@ -31,6 +32,11 @@ def forecast_har_rolling(har_data_complete, horizon, window_size=252, last_log_r
             X_with_const = sm.add_constant(X, has_constant='add')
             model = sm.OLS(y, X_with_const)
             model_fit = model.fit()
+
+            coefs = model_fit.params.to_dict()
+            coefs['step'] = i
+            coefs['date'] = har_data_complete.index[current_idx]
+            coef_records.append(coefs)
             
             # Get forecast date
             forecast_date = har_data_complete.index[current_idx]
@@ -58,8 +64,11 @@ def forecast_har_rolling(har_data_complete, horizon, window_size=252, last_log_r
     if last_log_rv is not None and len(forecasts) > 0:
         shift = last_log_rv - forecasts[0]
         forecasts = [f + shift for f in forecasts]
+
+    coef_df = pd.DataFrame(coef_records)
+    forecast_series = pd.Series(forecasts, index=forecast_dates, name='har_forecast')
     
-    return pd.Series(forecasts, index=forecast_dates, name='har_forecast')
+    return forecast_series, coef_df
 
 
 def calculate_calendar_lags(har_data, forecast_date):

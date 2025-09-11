@@ -31,6 +31,9 @@ raw_dir = 'other/data/raw_data'
 output_path = 'other/data/df.csv'
 holdout_period = 25
 
+# Initialize list to collect all model coefficients
+all_coeffs = []
+
 
 
 # ==============================================================================
@@ -69,52 +72,38 @@ freq_data_mapping = {
     '5min': (df_5m, '5-Minute')
 }
 
+ticker_groups = [
+    all_tickers[:4],
+    all_tickers[4:7],
+    all_tickers[7:10]
+]
+
 tickers_per_figure = 3
 num_figures = (len(all_tickers) + tickers_per_figure - 1) // tickers_per_figure
 
-for fig_idx in range(num_figures):
-    start_idx = fig_idx * tickers_per_figure
-    end_idx = min(start_idx + tickers_per_figure, len(all_tickers))
-    current_tickers = all_tickers[start_idx:end_idx]
-    
-    # Create subplot grid: rows = frequencies, cols = tickers
-    fig, axes = plt.subplots(3, len(current_tickers), figsize=(5*len(current_tickers), 12))
-    
-    # Handle case when only one ticker (axes becomes 1D)
-    if len(current_tickers) == 1:
-        axes = axes.reshape(-1, 1)
-    
-    fig.suptitle(f'Price Series - Figure {fig_idx + 1}', fontsize=16, fontweight='bold')
-    
-    # Plot each ticker for each frequency
-    for freq_idx, (freq_name, (df_freq, freq_label)) in enumerate(freq_data_mapping.items()):
-        for ticker_idx, ticker in enumerate(current_tickers):
+for freq_name, (df_freq, freq_label) in freq_data_mapping.items():
+    for group_idx, group_tickers in enumerate(ticker_groups):
+        fig, axes = plt.subplots(1, len(group_tickers), figsize=(5*len(group_tickers), 4))
+        if len(group_tickers) == 1:
+            axes = [axes]
+        fig.suptitle(f'{freq_label} Price Series - Group {group_idx + 1}', fontsize=16, fontweight='bold')
+        for ticker_idx, ticker in enumerate(group_tickers):
             col_name = f'{ticker}_close'
-            
+            ax = axes[ticker_idx]
             if col_name in df_freq.columns:
-                ax = axes[freq_idx, ticker_idx]
                 ax.plot(df_freq.index, df_freq[col_name], color='blue', alpha=0.7, linewidth=1)
-                ax.set_title(f'{ticker} - {freq_label}', fontsize=10)
+                ax.set_title(f'{ticker}', fontsize=10)
                 ax.grid(True, alpha=0.3)
-                
-                # Format x-axis labels
                 ax.tick_params(axis='x', rotation=45, labelsize=8)
                 ax.tick_params(axis='y', labelsize=8)
-                
-                # Set labels only for edge subplots
-                if freq_idx == 2:  # Bottom row
-                    ax.set_xlabel('Date', fontsize=9)
-                if ticker_idx == 0:  # Left column
-                    ax.set_ylabel('Price', fontsize=9)
+                ax.set_xlabel('Date', fontsize=9)
+                ax.set_ylabel('Price', fontsize=9)
             else:
-                # If ticker doesn't exist, hide the subplot
-                axes[freq_idx, ticker_idx].axis('off')
-    
-    # Adjust layout and save
-    plt.tight_layout()
-    filename = f'other/figures/price_series_figure_{fig_idx + 1}.png'
-    plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.close()
+                ax.axis('off')
+        plt.tight_layout()
+        filename = f'other/figures/price_series_{freq_name}_group_{group_idx + 1}.png'
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.close()
 
 # Convert to DataFrames
 lret_d = pd.DataFrame(lret_daily_data)
@@ -182,7 +171,7 @@ colors = {
 
 data = []
 for freq_name in freq:
-    for ticker in lrv_d.columns:  # Usa lrv_d.columns
+    for ticker in lrv_d.columns:
         if freq_name == 'daily':
             adf_stat = adf_results_d[ticker]['adf_stat']
             p_value = adf_results_d[ticker]['p_value']
@@ -377,7 +366,7 @@ if 'daily' in analysis_frequencies:
         
         # GARCH
         try:
-            forecast_garch = forecast_garch_rolling(
+            forecast_garch, garch_coefs = forecast_garch_rolling(
                 ticker_lret_d, 
                 horizon=holdout_period, 
                 window_size=window_sizes['daily'], 
@@ -385,13 +374,26 @@ if 'daily' in analysis_frequencies:
             )
 
             forecast_garch_d[ticker] = forecast_garch.set_axis(ticker_actuals_d.index)
+            
+            # Collect coefficients
+            for _, row in garch_coefs.iterrows():
+                for param in ['omega', 'alpha', 'beta']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'GARCH',
+                        'Frequency': 'daily',
+                        'Param': param,
+                        'Value': row[param],
+                        'Date': row.get('date', None),
+                        'Step': row.get('step', None)
+                    })
 
         except Exception as e:
             print(f"GARCH error for {ticker}: {e}")
         
         # HAR
         try:
-            forecast_har = forecast_har_rolling(
+            forecast_har, har_coefs = forecast_har_rolling(
                 ticker_har_d, 
                 horizon=holdout_period, 
                 window_size=window_sizes['daily'], 
@@ -399,6 +401,19 @@ if 'daily' in analysis_frequencies:
             )
 
             forecast_har_d[ticker] = forecast_har.set_axis(ticker_actuals_d.index)
+            
+            # Collect coefficients
+            for _, row in har_coefs.iterrows():
+                for param in ['const', 'daily_lag', 'weekly_lag', 'monthly_lag']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'HAR',
+                        'Frequency': 'daily',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': row.get('date', None),
+                        'Step': row.get('step', None)
+                    })
 
         except Exception as e:
             print(f"HAR error for {ticker}: {e}")
@@ -406,7 +421,7 @@ if 'daily' in analysis_frequencies:
         # RFSV
         try:
             scales_d = [1, 2, 5, 10]
-            forecast = rolling_forecast_rfsv(
+            forecast, rfsv_coefs = rolling_forecast_rfsv(
                 ticker_lrv_d, 
                 scales=scales_d, 
                 horizon=holdout_period, 
@@ -416,6 +431,19 @@ if 'daily' in analysis_frequencies:
             )
         
             forecast_rfsv_d[ticker] = forecast.set_axis(ticker_actuals_d.index)
+            
+            # Collect coefficients
+            for _, row in rfsv_coefs.iterrows():
+                for param in ['H', 'nu', 'n_points']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'RFSV',
+                        'Frequency': 'daily',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': None,
+                        'Step': None
+                    })
 
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
@@ -463,7 +491,7 @@ if 'hourly' in analysis_frequencies:
         
         # GARCH
         try:
-            forecast_garch = forecast_garch_rolling(
+            forecast_garch, garch_coefs = forecast_garch_rolling(
                 ticker_lret_h, 
                 horizon=holdout_period, 
                 window_size=window_sizes['hourly'], 
@@ -471,13 +499,26 @@ if 'hourly' in analysis_frequencies:
             )
 
             forecast_garch_h[ticker] = forecast_garch.set_axis(ticker_actuals_h.index)
+            
+            # Collect coefficients
+            for _, row in garch_coefs.iterrows():
+                for param in ['omega', 'alpha', 'beta']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'GARCH',
+                        'Frequency': 'hourly',
+                        'Param': param,
+                        'Value': row[param],
+                        'Date': row.get('date', None),
+                        'Step': row.get('step', None)
+                    })
 
         except Exception as e:
             print(f"GARCH error for {ticker}: {e}")
 
         # HAR
         try:
-            forecast_har = forecast_har_rolling(
+            forecast_har, har_coefs = forecast_har_rolling(
                 ticker_har_h, 
                 horizon=holdout_period, 
                 window_size=window_sizes['hourly'], 
@@ -485,6 +526,19 @@ if 'hourly' in analysis_frequencies:
             )
 
             forecast_har_h[ticker] = forecast_har.set_axis(ticker_actuals_h.index)
+            
+            # Collect coefficients
+            for _, row in har_coefs.iterrows():
+                for param in ['const', 'daily_lag', 'weekly_lag', 'monthly_lag']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'HAR',
+                        'Frequency': 'hourly',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': row.get('date', None),
+                        'Step': row.get('step', None)
+                    })
 
         except Exception as e:
             print(f"HAR error for {ticker}: {e}")       
@@ -492,7 +546,7 @@ if 'hourly' in analysis_frequencies:
         # RFSV
         try:
             scales_h = [1, 2, 5, 10, 20, 50]
-            forecast = rolling_forecast_rfsv(
+            forecast, rfsv_coefs = rolling_forecast_rfsv(
                 ticker_lrv_h, 
                 scales=scales_h, 
                 horizon=holdout_period, 
@@ -502,6 +556,19 @@ if 'hourly' in analysis_frequencies:
             )
 
             forecast_rfsv_h[ticker] = forecast.set_axis(ticker_actuals_h.index)
+            
+            # Collect coefficients
+            for _, row in rfsv_coefs.iterrows():
+                for param in ['H', 'nu', 'n_points']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'RFSV',
+                        'Frequency': 'hourly',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': None,
+                        'Step': None
+                    })
 
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
@@ -562,7 +629,7 @@ if '5min' in analysis_frequencies:
         
         # HAR
         try:
-            forecast_har = forecast_har_rolling(
+            forecast_har, har_coefs = forecast_har_rolling(
                 ticker_har_5m, 
                 horizon=holdout_period, 
                 window_size=window_sizes['5min'], 
@@ -570,6 +637,19 @@ if '5min' in analysis_frequencies:
             )
 
             forecast_har_5m[ticker] = forecast_har.set_axis(ticker_actuals_5m.index)
+            
+            # Collect coefficients
+            for _, row in har_coefs.iterrows():
+                for param in ['const', 'daily_lag', 'weekly_lag', 'monthly_lag']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'HAR',
+                        'Frequency': '5min',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': row.get('date', None),
+                        'Step': row.get('step', None)
+                    })
 
         except Exception as e:
             print(f"HAR error for {ticker}: {e}")
@@ -577,7 +657,7 @@ if '5min' in analysis_frequencies:
         # RFSV
         try:
             scales_5m = [1, 2, 5, 10, 20, 50, 100]
-            forecast = rolling_forecast_rfsv(
+            forecast, rfsv_coefs = rolling_forecast_rfsv(
                 ticker_lrv_5m, 
                 scales=scales_5m, 
                 horizon=holdout_period, 
@@ -587,6 +667,19 @@ if '5min' in analysis_frequencies:
             )
 
             forecast_rfsv_5m[ticker] = forecast.set_axis(ticker_actuals_5m.index)
+            
+            # Collect coefficients
+            for _, row in rfsv_coefs.iterrows():
+                for param in ['H', 'nu', 'n_points']:
+                    all_coeffs.append({
+                        'Ticker': ticker,
+                        'Model': 'RFSV',
+                        'Frequency': '5min',
+                        'Param': param,
+                        'Value': row.get(param, None),
+                        'Date': None,
+                        'Step': None
+                    })
 
         except Exception as e:
             print(f"RFSV error for {ticker}: {e}")
@@ -655,6 +748,11 @@ if '5min' in analysis_frequencies:
             'tickers': list(lrv_5m.columns)
         }, f)
     print("All 5-minute ticker forecasts saved")
+
+# Save all model coefficients
+coeffs_df = pd.DataFrame(all_coeffs)
+coeffs_df.to_csv('forecast_results/all_model_coefficients.csv', index=False)
+print("✅ All model coefficients saved to forecast_results/all_model_coefficients.csv")
 
 # ==============================================================================
 #                                  --- THANKS ---

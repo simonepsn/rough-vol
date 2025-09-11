@@ -17,52 +17,50 @@ def forecast_garch_rolling(log_returns_series, horizon, window_size=252, last_lo
     """
     forecasts = []
     forecast_dates = []
+    coef_records = []
+    coef_records = []
     
     # Start forecasting from the end of the training period
     start_idx = len(log_returns_series) - horizon
     
     for i in range(horizon):
-
         current_idx = start_idx + i
-        
         if current_idx >= window_size:
             window_returns = log_returns_series.iloc[current_idx - window_size:current_idx]
         else:
             window_returns = log_returns_series.iloc[:current_idx]
-        
         # Skip if window is too small
         if len(window_returns) < 10:
             forecasts.append(np.nan)
             forecast_dates.append(log_returns_series.index[current_idx])
+            coef_records.append({'omega': np.nan, 'alpha': np.nan, 'beta': np.nan, 'step': i, 'date': log_returns_series.index[current_idx]})
             continue
-        
         # Estimate GARCH on the rolling window
         try:
             model = arch_model(window_returns * 100, vol='Garch', p=1, q=1, dist='Normal')
             model_fit = model.fit(update_freq=0, disp='off')
-            
             forecast_result = model_fit.forecast(horizon=1, reindex=False)
             predicted_variance = forecast_result.variance.iloc[0, 0]
-            
             log_predicted_variance = np.log(predicted_variance / (100**2))
-            
+            # Save coefficients
+            params = model_fit.params
+            coef_records.append({'omega': params.get('omega', np.nan), 'alpha': params.get('alpha[1]', np.nan), 'beta': params.get('beta[1]', np.nan), 'step': i, 'date': log_returns_series.index[current_idx]})
         except Exception as e:
             print(f"Error estimating GARCH model at step {i}: {e}")
-            # Use historical variance as fallback
             log_predicted_variance = np.log(window_returns.var())
-        
+            coef_records.append({'omega': np.nan, 'alpha': np.nan, 'beta': np.nan, 'step': i, 'date': log_returns_series.index[current_idx]})
         forecasts.append(log_predicted_variance)
         forecast_dates.append(log_returns_series.index[current_idx])
 
     forecasts = pd.Series(forecasts, index=forecast_dates, name='garch_forecast')
     forecasts.index = pd.to_datetime(forecasts.index, errors='coerce') 
-    
     # Apply continuity adjustment to first forecast if last_log_rv is provided
     if last_log_rv is not None and len(forecasts) > 0:
         shift = last_log_rv - forecasts[0]
         forecasts = [f + shift for f in forecasts]
-    
-    return pd.Series(forecasts, index=forecast_dates, name='garch_forecast')
+    coef_df = pd.DataFrame(coef_records)
+    forecast_series = pd.Series(forecasts, index=forecast_dates, name='garch_forecast')
+    return forecast_series, coef_df
 
 # ===========================================================================
 # Previous versions, which are not recommended/(do not work) for rolling forecasts:

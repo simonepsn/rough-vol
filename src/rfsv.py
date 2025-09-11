@@ -90,18 +90,17 @@ def forecast_single_step(
         np.ndarray: Array of forecasted log realized volatility values.
     """
     n = len(past_log_rv)
-    times = np.arange(1, n + horizon + 1) # Time points for observed and forecasted data
+    times = np.arange(1, n + horizon + 1)
     cov = build_fbm_covariance_matrix(times, h)
 
-    sigma_pp = cov[:n, :n] # Covariance of past data
-    sigma_ff = cov[n:, n:] # Covariance of future data
-    sigma_fp = cov[n:, :n] # Covariance between future and past data
+    sigma_pp = cov[:n, :n]
+    sigma_ff = cov[n:, n:]
+    sigma_fp = cov[n:, :n]
 
-    # Add a small regularization term to the diagonal of sigma_pp to prevent singularity
+    # Small regularization term to the diagonal of sigma_pp to prevent singularity
     sigma_pp_reg = sigma_pp + np.eye(n) * 1e-6 
     
     try:
-        # Solve for the conditional mean
         solved = np.linalg.solve(sigma_pp_reg, past_log_rv / nu)
         mean = sigma_fp @ solved
     except np.linalg.LinAlgError as e:
@@ -153,6 +152,7 @@ def rolling_forecast_rfsv(
     Returns:
         pd.Series: Forecasted log realized volatility values for the specified horizon.
                    The index will be a default integer index.
+        coef_df (pd.DataFrame): DataFrame containing estimated coefficients (H, nu, n_points).
     """
     
     # Ensure rolling_window does not exceed the length of the series
@@ -162,15 +162,14 @@ def rolling_forecast_rfsv(
 
     # Use the last 'rolling_window' observations for estimation
     window = log_rv_series.iloc[-rolling_window:]
-    
-    h, nu, _ = estimate_h_loglog_weighted(window, scales)
-
+    h, nu, n_points = estimate_h_loglog_weighted(window, scales)
     print(f"Estimated H: {h}, nu: {nu} for frequency '{freq}'")
-    
+    # Save coefficients
+    coef_dict = {'H': h, 'nu': nu, 'n_points': n_points}
     if np.isnan(h) or np.isnan(nu):
         forecast = np.full(horizon, np.nan)
     else:
         forecast = forecast_single_step(window.values, h, nu, horizon, n_sims)
-    
-    # Return the forecasts as a pandas Series with a default integer index
-    return pd.Series(forecast)
+    forecast_series = pd.Series(forecast)
+    coef_df = pd.DataFrame([coef_dict])
+    return forecast_series, coef_df
